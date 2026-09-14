@@ -22,15 +22,16 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           lib = Path("src-tauri/src/lib.rs")
           s = lib.read_text()
 
-          old_pushall = '''        let pushall = serde_json::json!({
-              "pushing": {"sequence_id": "0", "command": "pushall", "version": 1}
-          })
-          .to_string();'''
-          new_pushall = '''        let pushall = serde_json::json!({
+          pushall_pattern = re.compile(
+              r'let\s+pushall\s*=\s*serde_json::json!\(\{\s*"pushing"\s*:\s*\{\s*"sequence_id"\s*:\s*"0"\s*,\s*"command"\s*:\s*"pushall"\s*,\s*"version"\s*:\s*1\s*\}\s*\}\)\s*\.to_string\(\);',
+              re.S,
+          )
+          new_pushall = '''let pushall = serde_json::json!({
               "pushing": {
                   "sequence_id": "20001",
                   "command": "pushall",
@@ -43,41 +44,33 @@ jobs:
               "pushing": {"sequence_id": "20002", "command": "start"}
           })
           .to_string();'''
-          if old_pushall not in s:
-              raise SystemExit("Could not find BambooMobile pushall block")
-          s = s.replace(old_pushall, new_pushall, 1)
+          s, count = pushall_pattern.subn(new_pushall, s, count=1)
+          if count != 1:
+              raise SystemExit(f"Could not patch pushall block; matches={count}")
 
-          old_publish = '''                    let _ = mqtt_client_c
-                          .publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())
-                          .await;
-                      let _ = mqtt_client_c
-                          .publish(&req_topic, QoS::AtMostOnce, false, get_version.clone())
-                          .await;'''
-          new_publish = '''                    let _ = mqtt_client_c
-                          .publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())
-                          .await;
-                      let _ = mqtt_client_c
-                          .publish(&req_topic, QoS::AtMostOnce, false, push_start.clone())
-                          .await;
-                      let _ = mqtt_client_c
-                          .publish(&req_topic, QoS::AtMostOnce, false, get_version.clone())
-                          .await;'''
-          if old_publish not in s:
-              raise SystemExit("Could not find BambooMobile SubAck publish block")
-          s = s.replace(old_publish, new_publish, 1)
+          publish_pattern = re.compile(
+              r'let\s+_\s*=\s*mqtt_client_c\s*\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*pushall\.clone\(\)\)\s*\.await;'
+          )
+          match = publish_pattern.search(s)
+          if not match:
+              raise SystemExit("Could not find pushall publish call")
+          push_start_publish = '''\n                    let _ = mqtt_client_c
+                        .publish(&req_topic, QoS::AtMostOnce, false, push_start.clone())
+                        .await;'''
+          s = s[:match.end()] + push_start_publish + s[match.end():]
           lib.write_text(s)
 
           gradle = Path("src-tauri/gen/android/app/build.gradle.kts")
           g = gradle.read_text()
-          debug_marker = '''        getByName("debug") {
-              manifestPlaceholders["usesCleartextTraffic"] = "true"'''
-          debug_replacement = '''        getByName("debug") {
-              applicationIdSuffix = ".x2d"
-              versionNameSuffix = "-X2D.1"
-              manifestPlaceholders["usesCleartextTraffic"] = "true"'''
-          if debug_marker not in g:
-              raise SystemExit("Could not find Android debug build block")
-          gradle.write_text(g.replace(debug_marker, debug_replacement, 1))
+          debug_pattern = re.compile(r'(getByName\("debug"\)\s*\{)')
+          g, count = debug_pattern.subn(
+              r'\1\n            applicationIdSuffix = ".x2d"\n            versionNameSuffix = "-X2D.1"',
+              g,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"Could not patch Android debug build block; matches={count}")
+          gradle.write_text(g)
 
           strings = Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
           x = strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D")
