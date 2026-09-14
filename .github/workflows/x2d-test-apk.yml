@@ -27,6 +27,7 @@ jobs:
           lib = Path("src-tauri/src/lib.rs")
           s = lib.read_text()
 
+          # X2D/full modern Studio pushall payload.
           pushall_pattern = re.compile(
               r'let\s+pushall\s*=\s*serde_json::json!\(\{\s*"pushing"\s*:\s*\{\s*"sequence_id"\s*:\s*"0"\s*,\s*"command"\s*:\s*"pushall"\s*,\s*"version"\s*:\s*1\s*\}\s*\}\)\s*\.to_string\(\);',
               re.S,
@@ -48,23 +49,48 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch pushall block; matches={count}")
 
-          publish_pattern = re.compile(
+          # Bambu Studio sends printer commands at MQTT QoS 1. BambooMobile used QoS 0.
+          push_publish_pattern = re.compile(
               r'let\s+_\s*=\s*mqtt_client_c\s*\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*pushall\.clone\(\)\)\s*\.await;'
           )
-          match = publish_pattern.search(s)
+          match = push_publish_pattern.search(s)
           if not match:
               raise SystemExit("Could not find pushall publish call")
-          push_start_publish = '''\n                    let _ = mqtt_client_c
-                        .publish(&req_topic, QoS::AtMostOnce, false, push_start.clone())
+          replacement = '''let _ = mqtt_client_c
+                        .publish(&req_topic, QoS::AtLeastOnce, false, pushall.clone())
+                        .await;
+                    let _ = mqtt_client_c
+                        .publish(&req_topic, QoS::AtLeastOnce, false, push_start.clone())
                         .await;'''
-          s = s[:match.end()] + push_start_publish + s[match.end():]
+          s = s[:match.start()] + replacement + s[match.end():]
+
+          # get_version in the same startup block should also mirror Studio QoS 1.
+          s, count = re.subn(
+              r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*get_version\.clone\(\)\)',
+              '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())',
+              s,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"Could not patch get_version QoS; matches={count}")
+
+          # DebugPage manual X2D Pushall/Start requests also need QoS 1.
+          debug_pattern = re.compile(
+              r'(async fn debug_send_request\([\s\S]*?c\.mqtt_client\s*\.publish\(&topic,\s*)QoS::AtMostOnce(,\s*false,\s*payload\))'
+          )
+          s, count = debug_pattern.subn(r'\1QoS::AtLeastOnce\2', s, count=1)
+          if count != 1:
+              raise SystemExit(f"Could not patch debug_send_request QoS; matches={count}")
+
           lib.write_text(s)
 
+          # Mark this build clearly. (Tauri may retain the base launcher identity,
+          # but Android version metadata still distinguishes the test build.)
           gradle = Path("src-tauri/gen/android/app/build.gradle.kts")
           g = gradle.read_text()
           debug_pattern = re.compile(r'(getByName\("debug"\)\s*\{)')
           g, count = debug_pattern.subn(
-              r'\1\n            applicationIdSuffix = ".x2d"\n            versionNameSuffix = "-X2D.1"',
+              r'\1\n            versionNameSuffix = "-X2D.2"',
               g,
               count=1,
           )
@@ -73,10 +99,10 @@ jobs:
           gradle.write_text(g)
 
           strings = Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
-          x = strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D")
+          x = strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D.2")
           strings.write_text(x)
 
-          print("X2D MQTT patch applied")
+          print("X2D.2 MQTT QoS1 patch applied")
           PY
 
       - name: Set up JDK 17
@@ -130,6 +156,6 @@ jobs:
       - name: Upload X2D APK
         uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-1
+          name: BambooMobile-X2D-2
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
