@@ -17,7 +17,7 @@ jobs:
       - name: Check out X2D branch
         uses: actions/checkout@v4
 
-      - name: Apply X2D.3 MQTT compatibility patch
+      - name: Apply X2D.4 MQTT diagnostic patch
         shell: bash
         run: |
           python3 - <<'PY'
@@ -27,9 +27,7 @@ jobs:
           lib = Path("src-tauri/src/lib.rs")
           s = lib.read_text()
 
-          # X2D-specific LAN clients that successfully request state use the
-          # minimal pushall envelope below. Keep sequence_id="0" and omit
-          # version/push_target/start for this compatibility test.
+          # X2D test request: minimal pushall at QoS 1.
           pushall_pattern = re.compile(
               r'let\s+pushall\s*=\s*serde_json::json!\(\{\s*"pushing"\s*:\s*\{\s*"sequence_id"\s*:\s*"0"\s*,\s*"command"\s*:\s*"pushall"\s*,\s*"version"\s*:\s*1\s*\}\s*\}\)\s*\.to_string\(\);',
               re.S,
@@ -45,7 +43,17 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch pushall block; matches={count}")
 
-          # Send pushall with MQTT QoS 1, matching working X2D clients.
+          # Subscribe to every MQTT subtopic for this printer, not only /report.
+          s, count = re.subn(
+              r'let report_topic = format!\("device/\{\}/report", serial_c\);',
+              'let report_topic = format!("device/{}/#", serial_c);',
+              s,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"Could not patch report wildcard; matches={count}")
+
+          # QoS 1 for pushall and version queries.
           s, count = re.subn(
               r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*pushall\.clone\(\)\)',
               '.publish(&req_topic, QoS::AtLeastOnce, false, pushall.clone())',
@@ -54,8 +62,6 @@ jobs:
           )
           if count != 1:
               raise SystemExit(f"Could not patch pushall QoS; matches={count}")
-
-          # get_version also uses QoS 1 for deterministic delivery.
           s, count = re.subn(
               r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*get_version\.clone\(\)\)',
               '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())',
@@ -65,7 +71,7 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch get_version QoS; matches={count}")
 
-          # Manual MQTT Debug requests use QoS 1 too.
+          # Manual debug requests use QoS 1.
           debug_pattern = re.compile(
               r'(async fn debug_send_request\([\s\S]*?c\.mqtt_client\s*\.publish\(&topic,\s*)QoS::AtMostOnce(,\s*false,\s*payload\))'
           )
@@ -73,13 +79,30 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch debug_send_request QoS; matches={count}")
 
+          # Debug event includes MQTT topic + parsed body while the real parser
+          # still receives the untouched MQTT payload.
+          old_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
+                        let _ = app_c.emit("mqtt-raw", raw);
+                    }'''
+          new_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
+                        let debug_payload = serde_json::json!({
+                            "_mqtt_topic": msg.topic.to_string(),
+                            "_body": serde_json::from_str::<serde_json::Value>(raw)
+                                .unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
+                        });
+                        let _ = app_c.emit("mqtt-raw", debug_payload.to_string());
+                    }'''
+          if old_emit not in s:
+              raise SystemExit("Could not find mqtt-raw emit block")
+          s = s.replace(old_emit, new_emit, 1)
+
           lib.write_text(s)
 
           gradle = Path("src-tauri/gen/android/app/build.gradle.kts")
           g = gradle.read_text()
           debug_pattern = re.compile(r'(getByName\("debug"\)\s*\{)')
           g, count = debug_pattern.subn(
-              r'\1\n            versionNameSuffix = "-X2D.3"',
+              r'\1\n            versionNameSuffix = "-X2D.4"',
               g,
               count=1,
           )
@@ -88,10 +111,9 @@ jobs:
           gradle.write_text(g)
 
           strings = Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
-          x = strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D.3")
-          strings.write_text(x)
+          strings.write_text(strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D.4"))
 
-          print("X2D.3 bare-pushall QoS1 patch applied")
+          print("X2D.4 wildcard MQTT diagnostic patch applied")
           PY
 
       - name: Set up JDK 17
@@ -145,6 +167,6 @@ jobs:
       - name: Upload X2D APK
         uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-3
+          name: BambooMobile-X2D-4
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
