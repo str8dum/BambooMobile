@@ -79,17 +79,21 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch debug_send_request QoS; matches={count}")
 
-          # Debug event includes MQTT topic + parsed body while the real parser
-          # still receives the untouched MQTT payload.
+          # Add the MQTT topic to the debug JSON without hiding the original
+          # top-level `print` or `info` key. The real parser still receives the
+          # untouched MQTT payload below this debug-only emit.
           old_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
                         let _ = app_c.emit("mqtt-raw", raw);
                     }'''
           new_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
-                        let debug_payload = serde_json::json!({
-                            "_mqtt_topic": msg.topic.to_string(),
-                            "_body": serde_json::from_str::<serde_json::Value>(raw)
-                                .unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
-                        });
+                        let mut debug_payload = serde_json::from_str::<serde_json::Value>(raw)
+                            .unwrap_or_else(|_| serde_json::json!({"_raw": raw}));
+                        if let Some(obj) = debug_payload.as_object_mut() {
+                            obj.insert(
+                                "_mqtt_topic".to_string(),
+                                serde_json::Value::String(msg.topic.to_string()),
+                            );
+                        }
                         let _ = app_c.emit("mqtt-raw", debug_payload.to_string());
                     }'''
           if old_emit not in s:
