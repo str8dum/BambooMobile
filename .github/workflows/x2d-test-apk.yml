@@ -1,0 +1,140 @@
+name: X2D Test APK
+
+on:
+  push:
+    branches:
+      - x2d-status
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out X2D branch
+        uses: actions/checkout@v4
+
+      - name: Apply X2D MQTT compatibility patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          lib = Path("src-tauri/src/lib.rs")
+          s = lib.read_text()
+
+          old_pushall = '''        let pushall = serde_json::json!({
+              "pushing": {"sequence_id": "0", "command": "pushall", "version": 1}
+          })
+          .to_string();'''
+          new_pushall = '''        let pushall = serde_json::json!({
+              "pushing": {
+                  "sequence_id": "20001",
+                  "command": "pushall",
+                  "version": 1,
+                  "push_target": 1
+              }
+          })
+          .to_string();
+          let push_start = serde_json::json!({
+              "pushing": {"sequence_id": "20002", "command": "start"}
+          })
+          .to_string();'''
+          if old_pushall not in s:
+              raise SystemExit("Could not find BambooMobile pushall block")
+          s = s.replace(old_pushall, new_pushall, 1)
+
+          old_publish = '''                    let _ = mqtt_client_c
+                          .publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())
+                          .await;
+                      let _ = mqtt_client_c
+                          .publish(&req_topic, QoS::AtMostOnce, false, get_version.clone())
+                          .await;'''
+          new_publish = '''                    let _ = mqtt_client_c
+                          .publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())
+                          .await;
+                      let _ = mqtt_client_c
+                          .publish(&req_topic, QoS::AtMostOnce, false, push_start.clone())
+                          .await;
+                      let _ = mqtt_client_c
+                          .publish(&req_topic, QoS::AtMostOnce, false, get_version.clone())
+                          .await;'''
+          if old_publish not in s:
+              raise SystemExit("Could not find BambooMobile SubAck publish block")
+          s = s.replace(old_publish, new_publish, 1)
+          lib.write_text(s)
+
+          gradle = Path("src-tauri/gen/android/app/build.gradle.kts")
+          g = gradle.read_text()
+          debug_marker = '''        getByName("debug") {
+              manifestPlaceholders["usesCleartextTraffic"] = "true"'''
+          debug_replacement = '''        getByName("debug") {
+              applicationIdSuffix = ".x2d"
+              versionNameSuffix = "-X2D.1"
+              manifestPlaceholders["usesCleartextTraffic"] = "true"'''
+          if debug_marker not in g:
+              raise SystemExit("Could not find Android debug build block")
+          gradle.write_text(g.replace(debug_marker, debug_replacement, 1))
+
+          strings = Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
+          x = strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D")
+          strings.write_text(x)
+
+          print("X2D MQTT patch applied")
+          PY
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK 27
+        run: sdkmanager "ndk;27.1.12297006"
+
+      - name: Set up Rust for Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JavaScript dependencies
+        run: pnpm install
+
+      - name: Build ARM64 debug APK
+        shell: bash
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+          pnpm tauri android build --debug --apk --target aarch64 --ci
+
+      - name: Show generated APKs
+        if: always()
+        run: find src-tauri/gen/android/app/build/outputs -type f -name "*.apk" -print || true
+
+      - name: Upload X2D APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BambooMobile-X2D-1
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
