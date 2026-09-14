@@ -1,0 +1,63 @@
+name: X2D Compatibility Audit
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/x2d-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Measure real X2D status payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          url = 'https://raw.githubusercontent.com/greghesp/ha-bambulab/main/custom_components/bambu_lab/pybambu/mock_data/MOCK-X2D.json'
+          with urllib.request.urlopen(url, timeout=20) as r:
+              raw = r.read()
+          data = json.loads(raw)
+          push = data['pushall']
+          compact = json.dumps(push, separators=(',', ':')).encode()
+          print(f'fixture_file_bytes={len(raw)}')
+          print(f'compact_pushall_bytes={len(compact)}')
+          print(f'rumqttc_0_24_default_limit={10*1024}')
+          print(f'exceeds_default={len(compact) > 10*1024}')
+          p = push['print']
+          for key in ['command','nozzle_temper','nozzle_target_temper','bed_temper','bed_target_temper','mc_percent','mc_remaining_time','layer_num','total_layer_num','gcode_state']:
+              print(f'{key}={p.get(key)!r}')
+          assert len(compact) > 10*1024, 'X2D compact pushall unexpectedly fits rumqttc default limit'
+          assert p.get('command') == 'push_status'
+          assert all(k in p for k in ['nozzle_temper','bed_temper','mc_percent','layer_num','total_layer_num','gcode_state'])
+          PY
+
+      - name: Verify BambooMobile does not raise packet limit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('src-tauri/src/lib.rs').read_text()
+          print('set_max_packet_size_present=', 'set_max_packet_size' in s)
+          assert 'set_max_packet_size' not in s, 'Base source already sets packet size; reassess audit'
+          PY
+
+      - name: Verify frontend status path
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          ctx = Path('src/context/PrinterContext.tsx').read_text()
+          dash = Path('src/pages/Dashboard.tsx').read_text()
+          assert "listen<PrinterStatus>('printer-status'" in ctx
+          assert 'actual={status.nozzle_temp}' in dash
+          assert 'actual={status.bed_temp}' in dash
+          print('frontend_status_path=PASS')
+          PY
