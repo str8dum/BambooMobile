@@ -27,7 +27,6 @@ jobs:
           lib = Path("src-tauri/src/lib.rs")
           s = lib.read_text()
 
-          # X2D test request: minimal pushall at QoS 1.
           pushall_pattern = re.compile(
               r'let\s+pushall\s*=\s*serde_json::json!\(\{\s*"pushing"\s*:\s*\{\s*"sequence_id"\s*:\s*"0"\s*,\s*"command"\s*:\s*"pushall"\s*,\s*"version"\s*:\s*1\s*\}\s*\}\)\s*\.to_string\(\);',
               re.S,
@@ -43,7 +42,6 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch pushall block; matches={count}")
 
-          # Subscribe to every MQTT subtopic for this printer, not only /report.
           s, count = re.subn(
               r'let report_topic = format!\("device/\{\}/report", serial_c\);',
               'let report_topic = format!("device/{}/#", serial_c);',
@@ -53,7 +51,6 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch report wildcard; matches={count}")
 
-          # QoS 1 for pushall and version queries.
           s, count = re.subn(
               r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*pushall\.clone\(\)\)',
               '.publish(&req_topic, QoS::AtLeastOnce, false, pushall.clone())',
@@ -62,6 +59,7 @@ jobs:
           )
           if count != 1:
               raise SystemExit(f"Could not patch pushall QoS; matches={count}")
+
           s, count = re.subn(
               r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*get_version\.clone\(\)\)',
               '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())',
@@ -71,7 +69,6 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch get_version QoS; matches={count}")
 
-          # Manual debug requests use QoS 1.
           debug_pattern = re.compile(
               r'(async fn debug_send_request\([\s\S]*?c\.mqtt_client\s*\.publish\(&topic,\s*)QoS::AtMostOnce(,\s*false,\s*payload\))'
           )
@@ -79,12 +76,10 @@ jobs:
           if count != 1:
               raise SystemExit(f"Could not patch debug_send_request QoS; matches={count}")
 
-          # Add the MQTT topic to the debug JSON without hiding the original
-          # top-level `print` or `info` key. The real parser still receives the
-          # untouched MQTT payload below this debug-only emit.
-          old_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
-                        let _ = app_c.emit("mqtt-raw", raw);
-                    }'''
+          emit_pattern = re.compile(
+              r'if let Ok\(raw\) = std::str::from_utf8\(&msg\.payload\) \{\s*let _ = app_c\.emit\("mqtt-raw", raw\);\s*\}',
+              re.S,
+          )
           new_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
                         let mut debug_payload = serde_json::from_str::<serde_json::Value>(raw)
                             .unwrap_or_else(|_| serde_json::json!({"_raw": raw}));
@@ -96,9 +91,9 @@ jobs:
                         }
                         let _ = app_c.emit("mqtt-raw", debug_payload.to_string());
                     }'''
-          if old_emit not in s:
-              raise SystemExit("Could not find mqtt-raw emit block")
-          s = s.replace(old_emit, new_emit, 1)
+          s, count = emit_pattern.subn(new_emit, s, count=1)
+          if count != 1:
+              raise SystemExit(f"Could not patch mqtt-raw emit block; matches={count}")
 
           lib.write_text(s)
 
