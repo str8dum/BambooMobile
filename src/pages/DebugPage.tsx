@@ -68,23 +68,18 @@ export default function DebugPage({ onMenuOpen }: { onMenuOpen: () => void }) {
               <path strokeLinecap='round' strokeLinejoin='round' d='M4 6h16M4 12h16M4 18h16' />
             </svg>
           </button>
-          <h1 className='font-semibold text-base'>MQTT Debug — X2D.2</h1>
+          <h1 className='font-semibold text-base'>MQTT Debug — X2D.3</h1>
           <div className='w-6' />
         </div>
 
         <div className='flex flex-wrap items-center justify-center gap-1.5'>
           <button
-            onClick={() => sendRequest({ pushing: { sequence_id: '20001', command: 'pushall', version: 1, push_target: 1 } })}
+            onClick={() => sendRequest({ pushing: { sequence_id: '0', command: 'pushall' } })}
             className='text-xs font-mono px-2 py-1.5 rounded bg-teal-800 text-teal-100 hover:bg-teal-700 transition-colors'>
             X2D Pushall
           </button>
           <button
-            onClick={() => sendRequest({ pushing: { sequence_id: '20002', command: 'start' } })}
-            className='text-xs font-mono px-2 py-1.5 rounded bg-teal-800 text-teal-100 hover:bg-teal-700 transition-colors'>
-            Start
-          </button>
-          <button
-            onClick={() => sendRequest({ info: { sequence_id: '20003', command: 'get_version' } })}
+            onClick={() => sendRequest({ info: { sequence_id: '1', command: 'get_version' } })}
             className='text-xs font-mono px-2 py-1.5 rounded bg-teal-800 text-teal-100 hover:bg-teal-700 transition-colors'>
             Version
           </button>
