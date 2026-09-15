@@ -7,6 +7,8 @@ on:
       - '.github/workflows/x2d-rc4.yml'
       - 'scripts/apply_x2d_rc.py'
       - 'scripts/apply_x2d_rc2.py'
+      - 'scripts/apply_x2d_audit_fixes.py'
+      - 'scripts/apply_x2d_final.py'
       - 'scripts/apply_x2d_rc4.py'
       - 'src/components/DualNozzleGauge.tsx'
       - 'src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt'
@@ -42,6 +44,12 @@ jobs:
       - name: Apply X2D camera and dual-nozzle patch
         run: python3 scripts/apply_x2d_rc2.py
 
+      - name: Apply audited backend hardening
+        run: python3 scripts/apply_x2d_audit_fixes.py
+
+      - name: Restore skip-object support
+        run: python3 scripts/apply_x2d_final.py
+
       - name: Apply RC4 model-gating regression fix
         run: python3 scripts/apply_x2d_rc4.py
 
@@ -52,6 +60,7 @@ jobs:
           from pathlib import Path
           s = Path('src-tauri/src/lib.rs').read_text()
           d = Path('src/pages/Dashboard.tsx').read_text()
+          card = Path('src/components/PrintStatusCard.tsx').read_text()
           g = Path('src-tauri/gen/android/app/build.gradle.kts').read_text()
           c = Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
           checks = {
@@ -71,6 +80,9 @@ jobs:
               'native camera credentials': 'username = "bblp"' in c and 'password = accessCode' in c,
               'dedicated RTSPS dependency': 'com.github.alexeyvasilyev:rtsp-client-android:5.2.0' in g,
               'unused Media3 dependency removed': 'media3-exoplayer-rtsp' not in g,
+              'skip-object MQTT command': '"command": "skip_objects"' in s and '"obj_list": object_ids' in s,
+              'skip-object acknowledgement parser': 'p.get("s_obj")' in s and 'skipped_objects' in s,
+              'skip-object UI': 'Skip Failed Object' in card and 'finish the current layer' in card,
           }
           for name, ok in checks.items():
               print(f'{name}: {"PASS" if ok else "FAIL"}')
