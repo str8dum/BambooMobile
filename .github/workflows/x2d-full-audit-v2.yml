@@ -165,10 +165,10 @@ jobs:
           cd src-tauri/gen/android
           set +e
 
-          ./gradlew --no-daemon clean :app:lintDebug --stacktrace --warning-mode all 2>&1 | tee ../../../android-lint.log
+          ./gradlew --no-daemon clean :app:lintArmDebug --stacktrace --warning-mode all 2>&1 | tee ../../../android-lint.log
           LINT_STATUS=${PIPESTATUS[0]}
 
-          ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace --warning-mode all 2>&1 | tee ../../../android-unit-tests.log
+          ./gradlew --no-daemon :app:testArmDebugUnitTest --stacktrace --warning-mode all 2>&1 | tee ../../../android-unit-tests.log
           TEST_STATUS=${PIPESTATUS[0]}
 
           set -e
@@ -176,10 +176,11 @@ jobs:
           echo "Android unit-test exit code: $TEST_STATUS"
 
           echo '--- Android lint text report ---'
-          if [ -f app/build/reports/lint-results-debug.txt ]; then
-            cat app/build/reports/lint-results-debug.txt
+          LINT_REPORT=$(find app/build/reports -maxdepth 2 -type f -name 'lint-results-*Debug.txt' | head -n 1 || true)
+          if [ -n "$LINT_REPORT" ]; then
+            cat "$LINT_REPORT"
           else
-            echo 'No lint-results-debug.txt was produced.'
+            echo 'No lint text report was produced.'
           fi
 
           if [ "$LINT_STATUS" -ne 0 ]; then
@@ -239,6 +240,6 @@ jobs:
             apk-badging.txt
             apk-sha256.txt
             x2d-audited-source.tar.gz
-            src-tauri/gen/android/app/build/reports/lint-results-debug.html
-            src-tauri/gen/android/app/build/reports/lint-results-debug.txt
+            src-tauri/gen/android/app/build/reports/lint-results-*.html
+            src-tauri/gen/android/app/build/reports/lint-results-*.txt
           if-no-files-found: error
