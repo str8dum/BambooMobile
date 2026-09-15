@@ -87,7 +87,6 @@ jobs:
         shell: bash
         run: |
           cd src-tauri
-          # These advisories all have semver-compatible patched releases.
           cargo update -p h2@0.4.14 --precise 0.4.16
           cargo update -p quinn-proto@0.11.14 --precise 0.11.15
           cargo update -p rustls@0.23.40 --precise 0.23.45
@@ -109,13 +108,6 @@ jobs:
         shell: bash
         run: |
           cargo install cargo-audit --locked
-          # Narrow exceptions only for currently-unfixable/unreachable paths:
-          # RUSTSEC-2026-0194/0195: quick-xml is pulled by Tauri/plist to parse
-          # application-owned build metadata, not network/printer XML.
-          # RUSTSEC-2026-0049/0098/0099/0104: rustls-webpki 0.102.x is retained by
-          # rumqttc/rustls 0.22, but BambooMobile injects SkipVerifier for the
-          # printer's self-signed LAN certificate, so WebPKI certificate/CRL/name
-          # validation is not on the MQTT or legacy camera connection path.
           cargo audit --file src-tauri/Cargo.lock \
             --ignore RUSTSEC-2026-0194 \
             --ignore RUSTSEC-2026-0195 \
@@ -159,13 +151,19 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
           rustup target add aarch64-linux-android
 
+      - name: Generate Android project and verify compile
+        shell: bash
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+          pnpm tauri android build --debug --apk --target aarch64 --ci
+
       - name: Android clean lint and unit tests
         shell: bash
         run: |
           cd src-tauri/gen/android
           ./gradlew --no-daemon clean :app:lintDebug :app:testDebugUnitTest
 
-      - name: Build ARM64 Android APK
+      - name: Rebuild final ARM64 Android APK
         shell: bash
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
