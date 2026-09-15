@@ -38,7 +38,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "X2dCamera"
         private const val RETRY_MS = 3000L
-        private const val SOCKET_TIMEOUT_MS = 8000
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -225,10 +224,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                     hasFirstFrame = true
                     Log.i(TAG, "X2D camera first frame rendered")
                 }
-
-                override fun onRtspFrameSizeChanged(width: Int, height: Int) {
-                    Log.i(TAG, "X2D camera frame size ${width}x${height}")
-                }
             })
 
             // Keep credentials separate from the URI so special characters in
@@ -238,7 +233,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 username = "bblp",
                 password = accessCode,
                 userAgent = "BambooMobile-X2D",
-                socketTimeout = SOCKET_TIMEOUT_MS,
             )
             surface.start(
                 requestVideo = true,
