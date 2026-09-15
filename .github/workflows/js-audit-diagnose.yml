@@ -33,10 +33,27 @@ jobs:
           const fs = require('fs');
           const a = JSON.parse(fs.readFileSync('pnpm-audit.json', 'utf8'));
           const lines = [];
-          lines.push(`auditReportVersion=${a.auditReportVersion ?? 'unknown'}`);
+          lines.push(`topLevelKeys=${Object.keys(a).join(',')}`);
           if (a.metadata?.vulnerabilities) lines.push(`counts=${JSON.stringify(a.metadata.vulnerabilities)}`);
-          const vulns = a.vulnerabilities || {};
-          for (const [name, v] of Object.entries(vulns)) {
+
+          for (const [id, adv] of Object.entries(a.advisories || {})) {
+            if (!['high', 'critical'].includes(adv.severity)) continue;
+            lines.push('---');
+            lines.push(`id=${id}`);
+            lines.push(`package=${adv.module_name}`);
+            lines.push(`severity=${adv.severity}`);
+            lines.push(`title=${adv.title}`);
+            lines.push(`vulnerable=${adv.vulnerable_versions}`);
+            lines.push(`patched=${adv.patched_versions}`);
+            lines.push(`recommendation=${adv.recommendation}`);
+            lines.push(`url=${adv.url}`);
+            for (const finding of (adv.findings || [])) {
+              lines.push(`installed=${finding.version}`);
+              for (const p of (finding.paths || [])) lines.push(`path=${p}`);
+            }
+          }
+
+          for (const [name, v] of Object.entries(a.vulnerabilities || {})) {
             if (!['high','critical'].includes(v.severity)) continue;
             lines.push('---');
             lines.push(`package=${name}`);
@@ -59,5 +76,5 @@ jobs:
           git config user.name "x2d-audit-bot"
           git config user.email "x2d-audit-bot@users.noreply.github.com"
           git add JS_AUDIT_REPORT.txt
-          git commit -m "Record production JS audit blocker" || exit 0
+          git commit -m "Record detailed production JS audit blocker" || exit 0
           git push origin HEAD:x2d-status
