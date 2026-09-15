@@ -1,0 +1,80 @@
+name: X2D Audit APK
+
+on:
+  push:
+    branches:
+      - x2d-audit
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build:
+    if: ${{ !contains(github.event.head_commit.message || '', '[x2d-patched]') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: x2d-audit
+          fetch-depth: 0
+
+      - name: Apply X2D audit patch
+        run: python3 .github/scripts/apply_x2d_audit.py
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK + NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK 27
+        run: sdkmanager "ndk;27.1.12297006"
+
+      - name: Set up Rust with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build signed debug APK
+        run: pnpm tauri android build --apk --debug
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
+
+      - name: Commit verified X2D audit code
+        run: |
+          git config user.name "x2d-audit-bot"
+          git config user.email "x2d-audit-bot@users.noreply.github.com"
+          git add src src-tauri
+          git commit -m "X2D audit: camera, dual nozzles, control and Skip Object [x2d-patched]"
+          git push origin HEAD:x2d-audit
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BambooMobile-X2D-audit-debug
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
