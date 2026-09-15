@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/x2d-full-audit-v2.yml'
       - 'scripts/apply_x2d_audit_fixes.py'
+      - 'scripts/apply_x2d_final.py'
   workflow_dispatch:
 
 permissions:
@@ -28,6 +29,7 @@ jobs:
           python3 scripts/apply_x2d_rc.py
           python3 scripts/apply_x2d_rc2.py
           python3 scripts/apply_x2d_audit_fixes.py
+          python3 scripts/apply_x2d_final.py
 
       - name: Verify critical invariants
         shell: bash
@@ -40,6 +42,7 @@ jobs:
           build=Path('src-tauri/build.rs').read_text()
           svc=Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt').read_text()
           cam=Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
+          card=Path('src/components/PrintStatusCard.tsx').read_text()
           checks={
             'camera ACL declaration': '"x2dCamera"' in build,
             'camera capability grant': 'x2dCamera:default' in caps['permissions'],
@@ -48,12 +51,16 @@ jobs:
             'MQTT packet limit': 'set_max_packet_size(256 * 1024, 256 * 1024)' in lib,
             'pushall QoS0': '.publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())' in lib,
             'get_version QoS1': '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())' in lib,
+            'skip_objects MQTT command': '"command": "skip_objects"' in lib and '"obj_list": object_ids' in lib,
+            'skip acknowledgement parser': 'p.get("s_obj")' in lib and 'skipped_objects' in lib,
+            'skip UI layer-boundary notice': 'finish the current layer' in card and 'Skip Failed Object' in card,
             'FTP newline guard': "cmd.contains('\\r') || cmd.contains('\\n')" in lib,
             'streaming file downloads': 'std::io::copy(&mut data, &mut out)' in lib,
             'preview cache sanitized': 'let cache_key: String = subtask_name' in lib,
             'AMS firmware temperature selection': '"curr_temp":   -1' in lib and '"tar_temp":    -1' in lib,
             'SSDP child abort guards': '_listener_guards' in lib,
             'standalone credentials retained': 'clearStoredCredentials()\n                                    stopSelf()' not in svc,
+            'old unused curr_tray removed': 'let curr_tray = status.tray_now;' not in lib,
           }
           failed=[]
           for name,ok in checks.items():
@@ -145,7 +152,7 @@ jobs:
       - name: Upload audited APK and reports
         uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-Audited
+          name: BambooMobile-X2D-RC3-Audited
           path: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             cargo-audit.txt
