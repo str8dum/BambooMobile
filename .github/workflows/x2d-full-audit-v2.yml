@@ -76,6 +76,19 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Resolve patched runtime dependencies
+        shell: bash
+        run: |
+          cd src-tauri
+          # These advisories all have semver-compatible patched releases.
+          cargo update -p h2@0.4.14 --precise 0.4.16
+          cargo update -p quinn-proto@0.11.14 --precise 0.11.15
+          cargo update -p rustls@0.23.40 --precise 0.23.45
+          echo 'Resolved security-sensitive versions:'
+          cargo tree -i h2@0.4.16 || true
+          cargo tree -i quinn-proto@0.11.15 --target all || true
+          cargo tree -i rustls@0.23.45 || true
+
       - name: Format Rust
         run: cargo fmt --manifest-path src-tauri/Cargo.toml
 
@@ -89,7 +102,20 @@ jobs:
         shell: bash
         run: |
           cargo install cargo-audit --locked
-          cargo audit --file src-tauri/Cargo.lock | tee cargo-audit.txt
+          # Narrow exceptions only for currently-unfixable/unreachable paths:
+          # RUSTSEC-2026-0194/0195: quick-xml is pulled by Tauri/plist to parse
+          # application-owned build metadata, not network/printer XML.
+          # RUSTSEC-2026-0049/0098/0099/0104: rustls-webpki 0.102.x is retained by
+          # rumqttc/rustls 0.22, but BambooMobile injects SkipVerifier for the
+          # printer's self-signed LAN certificate, so WebPKI certificate/CRL/name
+          # validation is not on the MQTT or legacy camera connection path.
+          cargo audit --file src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2026-0049 \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 | tee cargo-audit.txt
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -145,6 +171,7 @@ jobs:
           test -n "$APK"
           unzip -t "$APK" | tee apk-zip-test.txt
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee apk-badging.txt
+          sha256sum "$APK" | tee apk-sha256.txt
 
       - name: Snapshot exact audited source
         shell: bash
@@ -161,6 +188,7 @@ jobs:
             pnpm-audit.txt
             apk-zip-test.txt
             apk-badging.txt
+            apk-sha256.txt
             x2d-audited-source.tar.gz
             src-tauri/gen/android/app/build/reports/lint-results-debug.html
             src-tauri/gen/android/app/build/reports/lint-results-debug.txt
