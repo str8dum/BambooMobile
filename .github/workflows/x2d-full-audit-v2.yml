@@ -7,6 +7,7 @@ on:
       - '.github/workflows/x2d-full-audit-v2.yml'
       - 'scripts/apply_x2d_audit_fixes.py'
       - 'scripts/apply_x2d_final.py'
+      - 'scripts/apply_x2d_compile_fix.py'
   workflow_dispatch:
 
 permissions:
@@ -30,6 +31,7 @@ jobs:
           python3 scripts/apply_x2d_rc2.py
           python3 scripts/apply_x2d_audit_fixes.py
           python3 scripts/apply_x2d_final.py
+          python3 scripts/apply_x2d_compile_fix.py
 
       - name: Verify critical invariants
         shell: bash
@@ -60,7 +62,7 @@ jobs:
             'AMS firmware temperature selection': '"curr_temp":   -1' in lib and '"tar_temp":    -1' in lib,
             'SSDP child abort guards': '_listener_guards' in lib,
             'standalone credentials retained': 'clearStoredCredentials()\n                                    stopSelf()' not in svc,
-            'old unused curr_tray removed': 'let curr_tray = status.tray_now;' not in lib,
+            'unload tray context retained once': lib.count('let curr_tray = status.tray_now;') == 1,
           }
           failed=[]
           for name,ok in checks.items():
