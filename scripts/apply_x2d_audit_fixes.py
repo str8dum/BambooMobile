@@ -199,6 +199,13 @@ s = re.sub(
     flags=re.S,
 )
 
+# Strict Clippy findings from the full post-patch audit.
+s = s.replace(
+    'entries.sort_by(|a, b| b.modified.cmp(&a.modified));',
+    'entries.sort_by_key(|a| std::cmp::Reverse(a.modified));',
+)
+s = s.replace("path.split('/').last()", "path.split('/').next_back()")
+
 lib_path.write_text(s)
 
 # ── UI safety / credential presentation ──────────────────────────────────────
