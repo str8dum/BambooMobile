@@ -1,0 +1,83 @@
+name: X2D Android Source Diagnose
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/x2d-android-source-diagnose.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: x2d-status
+
+      - name: Apply exact X2D production patches
+        run: |
+          python3 scripts/apply_x2d_rc.py
+          python3 scripts/apply_x2d_rc2.py
+          python3 scripts/apply_x2d_audit_fixes.py
+          python3 scripts/apply_x2d_final.py
+          python3 scripts/apply_x2d_compile_fix.py
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Prepare Android SDK and NDK
+        shell: bash
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Android APK to reproduce generated source
+        shell: bash
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+          pnpm tauri android build --debug --apk --target aarch64 --ci
+
+      - name: Capture rewritten service source
+        shell: bash
+        run: |
+          FILE=src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt
+          {
+            echo '=== PRIORITY references ==='
+            grep -n 'PRIORITY\|IMPORTANCE' "$FILE" || true
+            echo
+            echo '=== lines 145-180 ==='
+            nl -ba "$FILE" | sed -n '145,180p'
+            echo
+            echo '=== git diff after Android build ==='
+            git diff -- "$FILE" || true
+          } | tee ANDROID_SERVICE_POST_BUILD.txt
+
+      - name: Commit diagnostic report
+        run: |
+          git config user.name "x2d-audit-bot"
+          git config user.email "x2d-audit-bot@users.noreply.github.com"
+          git add ANDROID_SERVICE_POST_BUILD.txt
+          git commit -m "Record post-build Android service source" || exit 0
+          git push origin HEAD:x2d-status
