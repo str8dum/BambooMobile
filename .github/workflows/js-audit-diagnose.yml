@@ -1,0 +1,63 @@
+name: JS Audit Diagnose
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/js-audit-diagnose.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: x2d-status
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Capture concise production audit
+        shell: bash
+        run: |
+          pnpm audit --prod --json > pnpm-audit.json || true
+          node <<'NODE'
+          const fs = require('fs');
+          const a = JSON.parse(fs.readFileSync('pnpm-audit.json', 'utf8'));
+          const lines = [];
+          lines.push(`auditReportVersion=${a.auditReportVersion ?? 'unknown'}`);
+          if (a.metadata?.vulnerabilities) lines.push(`counts=${JSON.stringify(a.metadata.vulnerabilities)}`);
+          const vulns = a.vulnerabilities || {};
+          for (const [name, v] of Object.entries(vulns)) {
+            if (!['high','critical'].includes(v.severity)) continue;
+            lines.push('---');
+            lines.push(`package=${name}`);
+            lines.push(`severity=${v.severity}`);
+            lines.push(`direct=${v.isDirect}`);
+            lines.push(`range=${v.range}`);
+            lines.push(`nodes=${JSON.stringify(v.nodes || [])}`);
+            lines.push(`effects=${JSON.stringify(v.effects || [])}`);
+            lines.push(`fixAvailable=${JSON.stringify(v.fixAvailable)}`);
+            for (const via of (v.via || [])) {
+              if (typeof via === 'string') lines.push(`via=${via}`);
+              else lines.push(`advisory=${via.source}|${via.name}|${via.severity}|${via.range}|${via.title}|${via.url}`);
+            }
+          }
+          fs.writeFileSync('JS_AUDIT_REPORT.txt', lines.join('\n') + '\n');
+          NODE
+          cat JS_AUDIT_REPORT.txt
+      - name: Commit audit report
+        run: |
+          git config user.name "x2d-audit-bot"
+          git config user.email "x2d-audit-bot@users.noreply.github.com"
+          git add JS_AUDIT_REPORT.txt
+          git commit -m "Record production JS audit blocker" || exit 0
+          git push origin HEAD:x2d-status
