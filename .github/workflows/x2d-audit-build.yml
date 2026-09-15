@@ -29,11 +29,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK + NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK 27
-        run: sdkmanager "ndk;27.1.12297006"
+      - name: Prepare Android SDK + NDK 27
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
 
       - name: Set up Rust with Android targets
         uses: dtolnay/rust-toolchain@stable
@@ -61,8 +62,6 @@ jobs:
 
       - name: Build signed debug APK
         run: pnpm tauri android build --apk --debug
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
 
       - name: Commit verified X2D audit code
         run: |
