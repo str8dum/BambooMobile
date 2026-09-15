@@ -1,0 +1,71 @@
+=== PRIORITY references ===
+413:                NotificationManager.IMPORTANCE_LOW
+
+=== lines 145-180 ===
+   145	
+   146	        mqttThread = Thread {
+   147	            val reportTopic  = "device/$serial/report"
+   148	            val requestTopic = "device/$serial/request"
+   149	            val pushall      =
+   150	                """{"pushing":{"sequence_id":"20000","command":"pushall","version":1,"push_target":1}}"""
+   151	
+   152	            // Status fields parsed from MQTT messages
+   153	            var gcodeState    = ""
+   154	            var prevGcodeState = ""
+   155	            var layerNum      = 0
+   156	            var prevLayer     = -1
+   157	            var totalLayers   = 0
+   158	            var progress      = 0
+   159	            var remainingMins = 0
+   160	            var subtaskName   = ""
+   161	            var lastUpdateMs  = 0L
+   162	            var firstStatus   = true   // first message received?
+   163	
+   164	            try {
+   165	                val sslSocketFactory = trustAllSslSocketFactory()
+   166	                val clientId = "bamboo-svc-${System.currentTimeMillis() % 1_000_000}"
+   167	                val client   = MqttClient("ssl://$ip:8883", clientId, MemoryPersistence())
+   168	                mqttClient   = client
+   169	
+   170	                client.setCallback(object : MqttCallbackExtended {
+   171	                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+   172	                        Log.i(TAG, "Standalone MQTT connected (reconnect=$reconnect)")
+   173	                        try {
+   174	                            client.subscribe(reportTopic, 0)
+   175	                            client.publish(
+   176	                                requestTopic,
+   177	                                MqttMessage(pushall.toByteArray()).apply { qos = 0 }
+   178	                            )
+   179	                        } catch (e: Exception) {
+   180	                            Log.w(TAG, "subscribe/publish failed: ${e.message}")
+
+=== git diff after Android build ===
+diff --git a/src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt b/src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt
+index 030b377..d61c576 100644
+--- a/src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt
++++ b/src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt
+@@ -147,7 +147,7 @@ class PrinterForegroundService : Service() {
+             val reportTopic  = "device/$serial/report"
+             val requestTopic = "device/$serial/request"
+             val pushall      =
+-                """{"pushing":{"sequence_id":"0","command":"pushall","version":1}}"""
++                """{"pushing":{"sequence_id":"20000","command":"pushall","version":1,"push_target":1}}"""
+ 
+             // Status fields parsed from MQTT messages
+             var gcodeState    = ""
+@@ -205,7 +205,6 @@ class PrinterForegroundService : Service() {
+                                 firstStatus = false
+                                 if (gcodeState != "RUNNING" && gcodeState != "PAUSE") {
+                                     Log.i(TAG, "Printer idle on start ($gcodeState) — stopping")
+-                                    clearStoredCredentials()
+                                     stopSelf()
+                                     return
+                                 }
+@@ -239,7 +238,6 @@ class PrinterForegroundService : Service() {
+                                     // Print finished or cancelled
+                                     if (prevGcodeState == "RUNNING" || prevGcodeState == "PAUSE") {
+                                         Log.i(TAG, "Print ended ($gcodeState) — stopping service")
+-                                        clearStoredCredentials()
+                                         stopSelf()
+                                     }
+                                 }
