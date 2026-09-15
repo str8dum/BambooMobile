@@ -1,0 +1,157 @@
+name: X2D RC4 Regression Fix Build
+
+on:
+  push:
+    branches: [x2d-rc4-fix]
+    paths:
+      - '.github/workflows/x2d-rc4.yml'
+      - 'scripts/apply_x2d_rc.py'
+      - 'scripts/apply_x2d_rc2.py'
+      - 'scripts/apply_x2d_rc4.py'
+      - 'src/components/DualNozzleGauge.tsx'
+      - 'src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt'
+      - 'src-tauri/gen/android/app/build.gradle.kts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux Tauri test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Apply consolidated X2D status patch
+        run: python3 scripts/apply_x2d_rc.py
+
+      - name: Apply X2D camera and dual-nozzle patch
+        run: python3 scripts/apply_x2d_rc2.py
+
+      - name: Apply RC4 model-gating regression fix
+        run: python3 scripts/apply_x2d_rc4.py
+
+      - name: Audit RC4 source invariants
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('src-tauri/src/lib.rs').read_text()
+          d = Path('src/pages/Dashboard.tsx').read_text()
+          g = Path('src-tauri/gen/android/app/build.gradle.kts').read_text()
+          c = Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
+          checks = {
+              '256KiB MQTT limit': 'set_max_packet_size(256 * 1024, 256 * 1024)' in s,
+              'push_target': '"push_target": 1' in s,
+              'dual-nozzle parser': 'left_nozzle_temp' in s and 'right_nozzle_temp' in s,
+              'packed extruder decode': '(packed & 0xFFFF)' in s and '((packed >> 16) & 0xFFFF)' in s,
+              'X2D serial capability seed': 'let is_x2d = serial.starts_with("20P");' in s,
+              'dual-nozzle seeded before telemetry': 'initial_status.dual_nozzle = true;' in s,
+              'legacy port-6000 worker excluded on X2D': 'if !is_x2d {' in s and 'tokio::spawn(camera_loop' in s,
+              'frontend serial X2D fallback': "startsWith('20P')" in d,
+              'frontend dual-nozzle cards': '(status.dual_nozzle || isX2D)' in d,
+              'frontend native camera X2D gate': '(status?.dual_nozzle || isX2D)' in d,
+              'frontend X2D port 322 label': 'X2D secure H.264 stream · port 322' in d,
+              'native X2D plugin': 'class X2dCameraPlugin' in c and 'RtspSurfaceView' in c,
+              'native RTSPS port 322': 'rtsps://$printerIp:322/streaming/live/1' in c,
+              'native camera credentials': 'username = "bblp"' in c and 'password = accessCode' in c,
+              'dedicated RTSPS dependency': 'com.github.alexeyvasilyev:rtsp-client-android:5.2.0' in g,
+              'unused Media3 dependency removed': 'media3-exoplayer-rtsp' not in g,
+          }
+          for name, ok in checks.items():
+              print(f'{name}: {"PASS" if ok else "FAIL"}')
+              assert ok, name
+          PY
+
+      - name: Audit real X2D payload schema
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          url='https://raw.githubusercontent.com/greghesp/ha-bambulab/main/custom_components/bambu_lab/pybambu/mock_data/MOCK-X2D.json'
+          with urllib.request.urlopen(url, timeout=20) as r:
+              data=json.loads(r.read())
+          p=data['pushall']['print']
+          ext=p['device']['extruder']
+          decoded={}
+          for e in ext['info']:
+              if e.get('id') in (0,1) and 'temp' in e:
+                  packed=int(e['temp'])
+                  decoded[e['id']]={'current': packed & 0xffff, 'target': (packed >> 16) & 0xffff}
+          active=(int(ext['state']) >> 4) & 0xf
+          print('decoded_nozzles=', decoded)
+          print('active_nozzle=', active)
+          assert 0 in decoded and 1 in decoded
+          assert active in (0,1)
+          assert p.get('bed_temper') is not None
+          assert p.get('nozzle_temper') is not None
+          PY
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run X2D Rust parser tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml x2d --lib
+
+      - name: Check Rust
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install JS dependencies
+        run: pnpm install
+
+      - name: Build web frontend
+        run: pnpm build
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Prepare Android SDK and NDK
+        shell: bash
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+
+      - name: Add Android Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Build ARM64 Android APK
+        shell: bash
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+          pnpm tauri android build --debug --apk --target aarch64 --ci
+
+      - name: Upload verified RC4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BambooMobile-X2D-RC4-Fixed
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
