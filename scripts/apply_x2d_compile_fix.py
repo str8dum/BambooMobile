@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# This script is also part of the full-audit trigger set; touching it here
+# ensures the audited run includes the Media3 Android camera dependency fix.
 lib_path = Path("src-tauri/src/lib.rs")
 s = lib_path.read_text()
 
