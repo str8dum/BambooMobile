@@ -67,8 +67,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
 
     // X2D liveview: dedicated RTSP/RTSPS-over-TCP client with MediaCodec rendering.
-    // 5.6.4 targets compileSdk 36, matching this application.
-    implementation("com.github.alexeyvasilyev:rtsp-client-android:5.6.4")
+    // 5.2.0 targets compileSdk 35 and Kotlin 2.0.x, compatible with this app's
+    // compileSdk 36 / Kotlin 1.9 compiler while retaining RTSPS + trust-all TLS.
+    implementation("com.github.alexeyvasilyev:rtsp-client-android:5.2.0")
 
     // Standalone MQTT client used by PrinterForegroundService when the Tauri
     // process is not running (e.g. after the user swipes the app away).
