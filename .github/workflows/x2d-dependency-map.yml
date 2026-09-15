@@ -1,0 +1,26 @@
+name: X2D Dependency Map
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/x2d-dependency-map.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Map vulnerable dependency chains
+        shell: bash
+        run: |
+          cd src-tauri
+          for p in 'h2@0.4.14' 'quick-xml@0.37.5' 'quick-xml@0.39.4' 'quinn-proto@0.11.14' 'rustls@0.23.40' 'rustls-webpki@0.102.8'; do
+            echo "===== $p ====="
+            cargo tree -i "$p" || true
+          done
