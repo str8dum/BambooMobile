@@ -1,2 +1,46 @@
-auditReportVersion=unknown
+topLevelKeys=advisories,metadata
 counts={"info":0,"low":0,"moderate":2,"high":4,"critical":0}
+---
+id=1123525
+package=vite
+severity=high
+title=vite: `server.fs.deny` bypass on Windows alternate paths
+vulnerable=<=6.4.2
+patched=>=6.4.3
+recommendation=undefined
+url=https://github.com/advisories/GHSA-fx2h-pf6j-xcff
+installed=6.4.2
+path=.>@tailwindcss/vite>vite
+---
+id=1138811
+package=nanoid
+severity=high
+title=nanoid: non-secure generators can loop indefinitely with negative size
+vulnerable=<3.3.16
+patched=>=3.3.16
+recommendation=undefined
+url=https://github.com/advisories/GHSA-28wg-ghj8-5hjv
+installed=3.3.12
+path=.>@tailwindcss/vite>vite>postcss>nanoid
+---
+id=1139427
+package=nanoid
+severity=high
+title=nanoid: custom generators can loop indefinitely when size is zero
+vulnerable=<3.3.18
+patched=>=3.3.18
+recommendation=undefined
+url=https://github.com/advisories/GHSA-2v37-7h3g-55p8
+installed=3.3.12
+path=.>@tailwindcss/vite>vite>postcss>nanoid
+---
+id=1139510
+package=postcss
+severity=high
+title=PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure
+vulnerable=<=8.5.17
+patched=>=8.5.18
+recommendation=undefined
+url=https://github.com/advisories/GHSA-r28c-9q8g-f849
+installed=8.5.14
+path=.>@tailwindcss/vite>vite>postcss
