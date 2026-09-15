@@ -1,4 +1,4 @@
-name: X2D RC Verify and Build
+name: X2D RC2 Verify and Build
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
     paths:
       - '.github/workflows/x2d-rc.yml'
       - 'scripts/apply_x2d_rc.py'
+      - 'scripts/apply_x2d_rc2.py'
+      - 'src/components/DualNozzleGauge.tsx'
+      - 'src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt'
   workflow_dispatch:
 
 permissions:
@@ -31,8 +34,11 @@ jobs:
             libssl-dev \
             patchelf
 
-      - name: Apply consolidated X2D compatibility patch
+      - name: Apply consolidated X2D status patch
         run: python3 scripts/apply_x2d_rc.py
+
+      - name: Apply X2D camera and dual-nozzle patch
+        run: python3 scripts/apply_x2d_rc2.py
 
       - name: Audit patched source invariants
         shell: bash
@@ -40,6 +46,10 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s = Path('src-tauri/src/lib.rs').read_text()
+          g = Path('src-tauri/gen/android/app/build.gradle.kts').read_text()
+          d = Path('src/pages/Dashboard.tsx').read_text()
+          c = Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
+          u = Path('src/utils/printer.ts').read_text()
           checks = {
               '256KiB MQTT limit': 'set_max_packet_size(256 * 1024, 256 * 1024)' in s,
               'clean session explicit': 'set_clean_session(true)' in s,
@@ -48,13 +58,24 @@ jobs:
               'get_version QoS1': '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())' in s,
               'MQTT errors visible': '"_mqtt_error"' in s,
               'serial normalized': 'serial.trim().to_uppercase()' in s,
+              'dual nozzle status fields': 'left_nozzle_temp' in s and 'right_nozzle_temp' in s,
+              'packed extruder decode': '(packed & 0xFFFF)' in s and '((packed >> 16) & 0xFFFF)' in s,
+              'active nozzle decode': '((state >> 4) & 0x0F)' in s,
+              'camera plugin registered': '"x2dCamera"' in s and '"X2dCameraPlugin"' in s,
+              'Media3 RTSP dependency': 'media3-exoplayer-rtsp:1.11.0' in g,
+              'RTSPS port 322': ':322/streaming/live/1' in c,
+              'RTP over TCP': 'setForceUseRtpTcp(true)' in c,
+              'trust-all TLS socket factory': 'sslContext.socketFactory' in c,
+              'dashboard native camera bridge': "plugin:x2dCamera|show_camera" in d,
+              'dashboard dual nozzle cards': 'DualNozzleGauge' in d,
+              'ETA minus removed': 'return h > 0 ? `${h}h${m}m` : `${m}m`;' in u,
           }
           for name, ok in checks.items():
               print(f'{name}: {"PASS" if ok else "FAIL"}')
               assert ok, name
           PY
 
-      - name: Measure reference X2D payload
+      - name: Audit real X2D payload schema
         shell: bash
         run: |
           python3 - <<'PY'
@@ -62,17 +83,30 @@ jobs:
           url='https://raw.githubusercontent.com/greghesp/ha-bambulab/main/custom_components/bambu_lab/pybambu/mock_data/MOCK-X2D.json'
           with urllib.request.urlopen(url, timeout=20) as r:
               data=json.loads(r.read())
-          b=json.dumps(data['pushall'], separators=(',', ':')).encode()
-          print('reference_x2d_compact_bytes=', len(b))
-          print('rc_incoming_limit=', 256*1024)
-          assert len(b) < 256*1024
+          p=data['pushall']['print']
+          compact=json.dumps(data['pushall'], separators=(',', ':')).encode()
+          ext=p['device']['extruder']
+          decoded={}
+          for e in ext['info']:
+              if e.get('id') in (0,1) and 'temp' in e:
+                  packed=int(e['temp'])
+                  decoded[e['id']]={'current': packed & 0xffff, 'target': (packed >> 16) & 0xffff}
+          active=(int(ext['state']) >> 4) & 0xf
+          print('reference_x2d_compact_bytes=', len(compact))
+          print('decoded_nozzles=', decoded)
+          print('active_nozzle=', active)
+          print('ipcam_rtsp_url=', p.get('ipcam',{}).get('rtsp_url'))
+          assert len(compact) < 256*1024
+          assert 0 in decoded and 1 in decoded
+          assert active in (0,1)
+          assert 'rtsp_url' in p.get('ipcam', {})
           PY
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run X2D Rust parser tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml x2d_compat --lib
+      - name: Run all X2D Rust parser tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml x2d --lib
 
       - name: Format patched Rust
         run: cargo fmt --manifest-path src-tauri/Cargo.toml
@@ -119,9 +153,9 @@ jobs:
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           pnpm tauri android build --debug --apk --target aarch64 --ci
 
-      - name: Upload verified RC APK
+      - name: Upload verified RC2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-RC1
+          name: BambooMobile-X2D-RC2
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
