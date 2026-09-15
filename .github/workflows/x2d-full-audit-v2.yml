@@ -5,6 +5,7 @@ on:
     branches: [x2d-status]
     paths:
       - '.github/workflows/x2d-full-audit-v2.yml'
+      - '.github/x2d-debug.keystore.b64'
       - 'scripts/apply_x2d_rc.py'
       - 'scripts/apply_x2d_rc2.py'
       - 'scripts/apply_x2d_audit_fixes.py'
@@ -28,6 +29,19 @@ jobs:
     steps:
       - name: Check out clean branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare stable signing and version
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          base64 -d .github/x2d-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
+          echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "Stable X2D signing key installed; versionCode=$VERSION_CODE"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
 
       - name: Install Linux / Tauri dependencies
         run: |
@@ -54,11 +68,19 @@ jobs:
           svc=Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/PrinterForegroundService.kt').read_text()
           cam=Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
           card=Path('src/components/PrintStatusCard.tsx').read_text()
+          dash=Path('src/pages/Dashboard.tsx').read_text()
+          gradle=Path('src-tauri/gen/android/app/build.gradle.kts').read_text()
           checks={
             'camera ACL declaration': '"x2dCamera"' in build,
             'camera capability grant': 'x2dCamera:default' in caps['permissions'],
             'RTSPS 322 camera': ':322/streaming/live/1' in cam and 'RtspSurfaceView' in cam and 'username = "bblp"' in cam and 'requestVideo = true' in cam,
+            'X2D camera UI': 'X2D secure H.264 stream · port 322' in dash,
+            'camera first-frame watchdog': 'FIRST_FRAME_TIMEOUT_MS = 12_000L' in cam and 'armFirstFrameWatchdog()' in cam and 'No X2D camera frame within' in cam,
+            'camera retry backoff': all(x in cam for x in ['RETRY_INITIAL_MS = 3_000L','RETRY_MAX_MS = 30_000L','retryDelayMs < 5_000L','retryDelayMs < 10_000L','retryDelayMs < 20_000L']),
             'dual nozzle packed decode': '(packed & 0xFFFF)' in lib and '((packed >> 16) & 0xFFFF)' in lib,
+            'dual nozzle UI': 'DualNozzleGauge' in dash,
+            'stable version override': 'BAMBOO_X2D_VERSION_CODE' in gradle,
+            'debug update package retained': 'applicationIdSuffix = ".x2d2"' in gradle,
             'MQTT packet limit': 'set_max_packet_size(256 * 1024, 256 * 1024)' in lib,
             'pushall QoS0': '.publish(&req_topic, QoS::AtMostOnce, false, pushall.clone())' in lib,
             'get_version QoS1': '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())' in lib,
@@ -222,6 +244,8 @@ jobs:
           unzip -t "$APK" | tee apk-zip-test.txt
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee apk-badging.txt
           sha256sum "$APK" | tee apk-sha256.txt
+          grep -q "package: name='com.joelsgc.bamboomobile.x2d2'" apk-badging.txt
+          grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'" apk-badging.txt
 
       - name: Snapshot exact audited source
         shell: bash
