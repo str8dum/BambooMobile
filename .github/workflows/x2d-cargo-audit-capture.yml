@@ -1,0 +1,51 @@
+name: X2D Cargo Audit Capture
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/x2d-cargo-audit-capture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Capture advisory JSON
+        shell: bash
+        run: |
+          cargo audit --file src-tauri/Cargo.lock --json > cargo-audit.json || true
+          python3 - <<'PY'
+          import json
+          d=json.load(open('cargo-audit.json'))
+          vulns=d.get('vulnerabilities',{})
+          print('found=', vulns.get('found'))
+          for item in vulns.get('list',[]):
+              adv=item.get('advisory',{})
+              pkg=item.get('package',{})
+              print('ADVISORY', adv.get('id'))
+              print('PACKAGE', pkg.get('name'), pkg.get('version'))
+              print('TITLE', adv.get('title'))
+              print('URL', adv.get('url'))
+              print('PATCHED', adv.get('patched_versions'))
+              print('UNAFFECTED', adv.get('unaffected_versions'))
+              print('VERSIONS', item.get('versions'))
+              print('---')
+          for kind, entries in d.get('warnings',{}).items():
+              print('WARNING_KIND', kind, 'COUNT', len(entries))
+              for item in entries:
+                  adv=item.get('advisory',{})
+                  pkg=item.get('package',{})
+                  print('WARNING', adv.get('id'), pkg.get('name'), pkg.get('version'), adv.get('title'))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x2d-cargo-audit-json
+          path: cargo-audit.json
