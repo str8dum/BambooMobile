@@ -12,6 +12,8 @@ on:
       - 'scripts/apply_x2d_compile_fix.py'
       - 'src-tauri/gen/android/app/build.gradle.kts'
       - 'src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/*.kt'
+      - 'src/**/*.ts'
+      - 'src/**/*.tsx'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -161,7 +163,49 @@ jobs:
         shell: bash
         run: |
           cd src-tauri/gen/android
-          ./gradlew --no-daemon clean :app:lintDebug :app:testDebugUnitTest
+          set +e
+
+          ./gradlew --no-daemon clean :app:lintDebug --stacktrace --warning-mode all 2>&1 | tee ../../../android-lint.log
+          LINT_STATUS=${PIPESTATUS[0]}
+
+          ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace --warning-mode all 2>&1 | tee ../../../android-unit-tests.log
+          TEST_STATUS=${PIPESTATUS[0]}
+
+          set -e
+          echo "Android lint exit code: $LINT_STATUS"
+          echo "Android unit-test exit code: $TEST_STATUS"
+
+          echo '--- Android lint text report ---'
+          if [ -f app/build/reports/lint-results-debug.txt ]; then
+            cat app/build/reports/lint-results-debug.txt
+          else
+            echo 'No lint-results-debug.txt was produced.'
+          fi
+
+          if [ "$LINT_STATUS" -ne 0 ]; then
+            echo '--- Tail of lint failures/errors ---'
+            grep -Ei 'error|fatal|failure|failed|exception|lint found|unresolved|priority' ../../../android-lint.log | tail -n 250 || true
+          fi
+          if [ "$TEST_STATUS" -ne 0 ]; then
+            echo '--- Tail of unit-test failures/errors ---'
+            grep -Ei 'error|fatal|failure|failed|exception|test' ../../../android-unit-tests.log | tail -n 250 || true
+          fi
+
+          if [ "$LINT_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload Android diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x2d-android-diagnostics-${{ github.run_number }}
+          path: |
+            android-lint.log
+            android-unit-tests.log
+            src-tauri/gen/android/app/build/reports/
+            src-tauri/gen/android/app/build/test-results/
+          if-no-files-found: warn
 
       - name: Rebuild final ARM64 Android APK
         shell: bash
