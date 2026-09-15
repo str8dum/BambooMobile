@@ -66,11 +66,10 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
 
-    // Native X2D RTSPS camera player. Keep the Media3 artifacts on the same
-    // version so ExoPlayer, common Player APIs, and the RTSP module resolve
-    // against one compatible release.
-    implementation("androidx.media3:media3-exoplayer:1.8.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.8.1")
+    // X2D liveview: H.264 over RTSPS (TLS) on port 322. Keep both Media3
+    // modules on the same release so ExoPlayer and the RTSP stack stay aligned.
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.11.0")
 
     // Standalone MQTT client used by PrinterForegroundService when the Tauri
     // process is not running (e.g. after the user swipes the app away).
