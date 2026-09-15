@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out X2D branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare stable signing and version
         shell: bash
@@ -47,10 +49,10 @@ jobs:
           dash = Path('src/pages/Dashboard.tsx').read_text()
           required = {
               'camera port 322': ':322/streaming/live/1' in cam and 'RtspSurfaceView' in cam,
-              'no legacy X2D port 6000 placeholder': 'Waiting for stream on port 6000' not in dash,
               'dual nozzle decode': '(packed & 0xFFFF)' in lib and '((packed >> 16) & 0xFFFF)' in lib,
               'dual nozzle UI': 'DualNozzleGauge' in dash,
               'X2D camera UI': 'X2D secure H.264 stream · port 322' in dash,
+              'X2D chooses 322 UI': "status?.dual_nozzle ?" in dash and "'X2D secure H.264 stream · port 322'" in dash,
           }
           failed = [name for name, ok in required.items() if not ok]
           for name, ok in required.items():
