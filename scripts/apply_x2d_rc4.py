@@ -11,7 +11,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 # behavior must not depend on whether a particular incremental MQTT packet
 # happens to contain device.extruder.info. The configured X2D serial (20P...)
 # is authoritative for capabilities; telemetry still fills the live values.
-# This script is intentionally applied after the RC1/RC2 patch scripts in CI.
+# This script is intentionally applied after the RC1/RC2/audit/final patch scripts in CI.
 
 # ── Rust backend: seed X2D capabilities from the configured serial ────────────
 lib = Path("src-tauri/src/lib.rs")
@@ -50,6 +50,17 @@ s = replace_once(
         drop(camera_handle);
     }''',
     "disable legacy camera worker on X2D",
+)
+
+# The old final audit patch removed every `curr_tray` binding after delegating
+# filament temperatures to firmware. unload_filament still needs curr_tray to
+# select the AMS unit, so restore that one required binding before ams_id is built.
+s = replace_once(
+    s,
+    '''        let ams_id: u8 = if curr_tray == 255 || curr_tray == 254 {''',
+    '''        let curr_tray = status.tray_now;
+        let ams_id: u8 = if curr_tray == 255 || curr_tray == 254 {''',
+    "restore unload current tray",
 )
 
 lib.write_text(s)
