@@ -1,0 +1,51 @@
+name: X2D Pre-Lint Snapshot
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/x2d-prelint-snapshot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply exact production patches
+        run: |
+          python3 scripts/apply_x2d_rc.py
+          python3 scripts/apply_x2d_rc2.py
+          python3 scripts/apply_x2d_audit_fixes.py
+          python3 scripts/apply_x2d_final.py
+          python3 scripts/apply_x2d_compile_fix.py
+
+      - name: Capture exact pre-lint Android sources
+        shell: bash
+        run: |
+          CAM=src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt
+          GRADLE=src-tauri/gen/android/app/build.gradle.kts
+          {
+            echo '=== HEAD ==='
+            git rev-parse HEAD
+            echo '=== CAMERA SHA256 ==='
+            sha256sum "$CAM"
+            echo '=== CAMERA ==='
+            nl -ba "$CAM"
+            echo '=== PLAYER/CONTEXT MATCHES ==='
+            grep -nE 'PlayerView|TextureView|context|activity' "$CAM" || true
+            echo '=== GRADLE SHA256 ==='
+            sha256sum "$GRADLE"
+            echo '=== ANDROID SDK / MEDIA3 LINES ==='
+            grep -nE 'compileSdk|targetSdk|media3' "$GRADLE" || true
+          } | tee x2d-prelint-snapshot.txt
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: x2d-prelint-snapshot
+          path: x2d-prelint-snapshot.txt
