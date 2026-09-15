@@ -17,148 +17,46 @@ jobs:
       - name: Check out X2D branch
         uses: actions/checkout@v4
 
-      - name: Apply X2D.5 MQTT ACK diagnostic patch
+      - name: Prepare stable signing and version
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          base64 -d .github/x2d-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
+          echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "Stable X2D signing key installed; versionCode=$VERSION_CODE"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+
+      - name: Apply exact production X2D patches
+        shell: bash
+        run: |
+          python3 scripts/apply_x2d_rc.py
+          python3 scripts/apply_x2d_rc2.py
+          python3 scripts/apply_x2d_audit_fixes.py
+          python3 scripts/apply_x2d_final.py
+          python3 scripts/apply_x2d_compile_fix.py
+
+      - name: Verify X2D camera and temperature invariants
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
-
-          lib = Path("src-tauri/src/lib.rs")
-          s = lib.read_text()
-
-          # Keep the minimal X2D pushall request and wildcard subscription.
-          pushall_pattern = re.compile(
-              r'let\s+pushall\s*=\s*serde_json::json!\(\{\s*"pushing"\s*:\s*\{\s*"sequence_id"\s*:\s*"0"\s*,\s*"command"\s*:\s*"pushall"\s*,\s*"version"\s*:\s*1\s*\}\s*\}\)\s*\.to_string\(\);',
-              re.S,
-          )
-          new_pushall = '''let pushall = serde_json::json!({
-              "pushing": {
-                  "sequence_id": "0",
-                  "command": "pushall"
-              }
-          })
-          .to_string();'''
-          s, count = pushall_pattern.subn(new_pushall, s, count=1)
-          if count != 1:
-              raise SystemExit(f"Could not patch pushall block; matches={count}")
-
-          s, count = re.subn(
-              r'let report_topic = format!\("device/\{\}/report", serial_c\);',
-              'let report_topic = format!("device/{}/#", serial_c);',
-              s,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit(f"Could not patch report wildcard; matches={count}")
-
-          # QoS 1 for outbound diagnostics.
-          s, count = re.subn(
-              r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*pushall\.clone\(\)\)',
-              '.publish(&req_topic, QoS::AtLeastOnce, false, pushall.clone())',
-              s,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit(f"Could not patch pushall QoS; matches={count}")
-          s, count = re.subn(
-              r'\.publish\(&req_topic,\s*QoS::AtMostOnce,\s*false,\s*get_version\.clone\(\)\)',
-              '.publish(&req_topic, QoS::AtLeastOnce, false, get_version.clone())',
-              s,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit(f"Could not patch get_version QoS; matches={count}")
-
-          debug_pattern = re.compile(
-              r'(async fn debug_send_request\([\s\S]*?c\.mqtt_client\s*\.publish\(&topic,\s*)QoS::AtMostOnce(,\s*false,\s*payload\))'
-          )
-          s, count = debug_pattern.subn(r'\1QoS::AtLeastOnce\2', s, count=1)
-          if count != 1:
-              raise SystemExit(f"Could not patch debug_send_request QoS; matches={count}")
-
-          # Emit broker SUBACK details into the existing mqtt-raw debug stream.
-          suback_old = 'Ok(Event::Incoming(Packet::SubAck(_))) => {'
-          suback_new = '''Ok(Event::Incoming(Packet::SubAck(ack))) => {
-                    let _ = app_c.emit(
-                        "mqtt-raw",
-                        serde_json::json!({
-                            "_mqtt_meta": {
-                                "event": "SUBACK",
-                                "pkid": ack.pkid,
-                                "return_codes": format!("{:?}", ack.return_codes)
-                            }
-                        }).to_string(),
-                    );'''
-          if suback_old not in s:
-              raise SystemExit("Could not find SubAck arm")
-          s = s.replace(suback_old, suback_new, 1)
-
-          # Insert wire-level Outgoing Publish and inbound PUBACK events before
-          # the normal inbound Publish arm. A Clear -> Pushall test will then
-          # show whether the QoS1 packet left the client and was ACKed by broker.
-          publish_arm = 'Ok(Event::Incoming(Packet::Publish(msg))) => {'
-          wire_arms = '''Ok(Event::Outgoing(rumqttc::Outgoing::Publish(pkid))) => {
-                    let _ = app_c.emit(
-                        "mqtt-raw",
-                        serde_json::json!({
-                            "_mqtt_meta": {"event": "OUTGOING_PUBLISH", "pkid": pkid}
-                        }).to_string(),
-                    );
-                }
-                Ok(Event::Incoming(Packet::PubAck(ack))) => {
-                    let _ = app_c.emit(
-                        "mqtt-raw",
-                        serde_json::json!({
-                            "_mqtt_meta": {"event": "PUBACK", "pkid": ack.pkid}
-                        }).to_string(),
-                    );
-                }
-                Ok(Event::Incoming(Packet::Publish(msg))) => {'''
-          if publish_arm not in s:
-              raise SystemExit("Could not find incoming Publish arm")
-          s = s.replace(publish_arm, wire_arms, 1)
-
-          # Preserve actual topic on incoming messages while leaving print/info
-          # at top level so the debug screen and parser remain readable.
-          emit_pattern = re.compile(
-              r'if let Ok\(raw\) = std::str::from_utf8\(&msg\.payload\) \{\s*let _ = app_c\.emit\("mqtt-raw", raw\);\s*\}',
-              re.S,
-          )
-          new_emit = '''if let Ok(raw) = std::str::from_utf8(&msg.payload) {
-                        let mut debug_payload = serde_json::from_str::<serde_json::Value>(raw)
-                            .unwrap_or_else(|_| serde_json::json!({"_raw": raw}));
-                        if let Some(obj) = debug_payload.as_object_mut() {
-                            obj.insert(
-                                "_mqtt_topic".to_string(),
-                                serde_json::Value::String(msg.topic.to_string()),
-                            );
-                        }
-                        let _ = app_c.emit("mqtt-raw", debug_payload.to_string());
-                    }'''
-          s, count = emit_pattern.subn(new_emit, s, count=1)
-          if count != 1:
-              raise SystemExit(f"Could not patch mqtt-raw emit; matches={count}")
-
-          lib.write_text(s)
-
-          # Make the diagnostic build unmistakable in the UI.
-          debug_page = Path("src/pages/DebugPage.tsx")
-          d = debug_page.read_text().replace("MQTT Debug — X2D.3", "MQTT Debug — X2D.5")
-          debug_page.write_text(d)
-
-          gradle = Path("src-tauri/gen/android/app/build.gradle.kts")
-          g = gradle.read_text()
-          debug_build = re.compile(r'(getByName\("debug"\)\s*\{)')
-          g, count = debug_build.subn(r'\1\n            versionNameSuffix = "-X2D.5"', g, count=1)
-          if count != 1:
-              raise SystemExit(f"Could not patch Android debug block; matches={count}")
-          gradle.write_text(g)
-
-          strings = Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
-          strings.write_text(strings.read_text().replace("Bamboo Mobile", "Bamboo Mobile X2D.5"))
-
-          print("X2D.5 MQTT ACK diagnostics applied")
+          lib = Path('src-tauri/src/lib.rs').read_text()
+          cam = Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
+          dash = Path('src/pages/Dashboard.tsx').read_text()
+          required = {
+              'camera port 322': ':322/streaming/live/1' in cam and 'RtspSurfaceView' in cam,
+              'no legacy X2D port 6000 placeholder': 'Waiting for stream on port 6000' not in dash,
+              'dual nozzle decode': '(packed & 0xFFFF)' in lib and '((packed >> 16) & 0xFFFF)' in lib,
+              'dual nozzle UI': 'DualNozzleGauge' in dash,
+              'X2D camera UI': 'X2D secure H.264 stream · port 322' in dash,
+          }
+          failed = [name for name, ok in required.items() if not ok]
+          for name, ok in required.items():
+              print(f'{name}: {"PASS" if ok else "FAIL"}')
+          if failed:
+              raise SystemExit('failed invariants: ' + ', '.join(failed))
           PY
 
       - name: Set up JDK 17
@@ -197,7 +95,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install JavaScript dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build ARM64 debug APK
         shell: bash
@@ -212,6 +110,6 @@ jobs:
       - name: Upload X2D APK
         uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-5
+          name: BambooMobile-X2D-Production-Test
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
