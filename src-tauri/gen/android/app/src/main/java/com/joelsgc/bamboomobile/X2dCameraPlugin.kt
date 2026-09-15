@@ -188,6 +188,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun startPlayer() {
         val texture = textureView ?: return
         if (printerIp.isBlank() || accessCode.isBlank()) return
