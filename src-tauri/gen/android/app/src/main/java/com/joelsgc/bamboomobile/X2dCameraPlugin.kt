@@ -1,5 +1,3 @@
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
-
 package com.joelsgc.bamboomobile
 
 import android.app.Activity
@@ -9,58 +7,50 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import com.alexvas.rtsp.widget.RtspStatusListener
+import com.alexvas.rtsp.widget.RtspSurfaceView
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
  * Native X2D camera player.
  *
- * X2D exposes H.264 over RTSPS at:
+ * X2D exposes H.264 over secure RTSP at:
  *   rtsps://bblp:<access-code>@<printer-ip>:322/streaming/live/1
  *
- * Media3's RTSP stack is supplied a trust-all SSLSocketFactory because Bambu
- * printers use a self-signed device certificate. RTP is forced over TCP so the
- * complete stream stays inside the TLS/RTSP connection and works reliably on
- * mobile LANs.
+ * Bambu's camera uses a self-signed TLS certificate and RTSPS-over-TCP.  The
+ * dedicated rtsp-client-android stack used here explicitly supports RTSPS,
+ * Basic/Digest authentication, self-signed TLS, and H.264 MediaCodec rendering.
  *
- * The player renders into a TextureView layered directly over the WebView's
- * camera card. JavaScript sends the card bounds whenever it moves or resizes.
+ * The player renders into a native SurfaceView layered directly over the
+ * WebView's camera card. JavaScript sends the card bounds whenever it moves or
+ * resizes.
  */
 @TauriPlugin
 class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "X2dCamera"
         private const val RETRY_MS = 3000L
+        private const val SOCKET_TIMEOUT_MS = 8000
     }
 
     private val handler = Handler(Looper.getMainLooper())
 
     private var container: FrameLayout? = null
-    private var textureView: TextureView? = null
-    private var player: ExoPlayer? = null
+    private var rtspView: RtspSurfaceView? = null
     private var retryRunnable: Runnable? = null
 
     private var printerIp: String = ""
     private var accessCode: String = ""
     private var requestedVisible = false
+    private var streamStarted = false
     private var hasFirstFrame = false
 
     @Command
@@ -82,7 +72,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 return@runOnUiThread
             }
 
-            val samePrinter = printerIp == ip && accessCode == code && player != null
+            val samePrinter = printerIp == ip && accessCode == code && streamStarted
             printerIp = ip
             accessCode = code
 
@@ -90,8 +80,8 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             updateBoundsNative(x, y, width, height, scale, visible)
 
             if (!samePrinter) {
-                releasePlayerOnly()
-                startPlayer()
+                releaseStreamOnly()
+                startStream()
             }
             invoke.resolve()
         }
@@ -122,7 +112,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun ensureView() {
-        if (container != null && textureView != null) return
+        if (container != null && rtspView != null) return
 
         val root = activity.findViewById<ViewGroup>(android.R.id.content) as? FrameLayout
         if (root == null) {
@@ -135,7 +125,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             isClickable = false
             isFocusable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            visibility = View.INVISIBLE
+            visibility = View.VISIBLE
             elevation = 100f
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -144,12 +134,17 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             }
             clipToOutline = true
         }
-        val texture = TextureView(activity).apply {
+
+        val surface = RtspSurfaceView(activity).apply {
             isClickable = false
             isFocusable = false
+            // Keep the hardware-decoded video above the Tauri WebView while the
+            // parent FrameLayout constrains it to the camera-card bounds.
+            setZOrderOnTop(true)
         }
+
         box.addView(
-            texture,
+            surface,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -158,7 +153,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         root.addView(box, FrameLayout.LayoutParams(1, 1))
 
         container = box
-        textureView = texture
+        rtspView = surface
     }
 
     private fun updateBoundsNative(
@@ -177,74 +172,83 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         lp.topMargin = (y * scale).roundToInt()
         box.layoutParams = lp
         requestedVisible = visible
-        applyVisibility()
+
+        // Do not set a SurfaceView parent to INVISIBLE while streaming. Android
+        // destroys its Surface in that state, which would stop the decoder. The
+        // element is physically positioned with the web card and is removed when
+        // the camera page/sidebar is no longer active.
+        box.visibility = View.VISIBLE
     }
 
-    private fun applyVisibility() {
-        container?.visibility = if (hasFirstFrame && requestedVisible) {
-            View.VISIBLE
-        } else {
-            View.INVISIBLE
-        }
-    }
-
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun startPlayer() {
-        val texture = textureView ?: return
+    private fun startStream() {
+        val surface = rtspView ?: return
         if (printerIp.isBlank() || accessCode.isBlank()) return
 
         retryRunnable?.let(handler::removeCallbacks)
         retryRunnable = null
         hasFirstFrame = false
-        applyVisibility()
 
         try {
-            val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-            })
-            val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(null, trustAll, SecureRandom())
+            val uri = Uri.parse("rtsps://$printerIp:322/streaming/live/1")
+            surface.setStatusListener(object : RtspStatusListener {
+                override fun onRtspStatusConnecting() {
+                    Log.i(TAG, "Connecting X2D camera on RTSPS port 322")
+                }
 
-            val encodedCode = Uri.encode(accessCode)
-            val url = "rtsps://bblp:$encodedCode@$printerIp:322/streaming/live/1"
+                override fun onRtspStatusConnected() {
+                    Log.i(TAG, "X2D RTSPS session connected")
+                }
 
-            val p = ExoPlayer.Builder(activity).build()
-            p.setVideoTextureView(texture)
-            p.addListener(object : Player.Listener {
-                override fun onRenderedFirstFrame() {
+                override fun onRtspStatusDisconnecting() {
+                    Log.i(TAG, "X2D RTSPS session disconnecting")
+                }
+
+                override fun onRtspStatusDisconnected() {
+                    Log.w(TAG, "X2D RTSPS session disconnected")
+                    if (streamStarted) scheduleRetry()
+                }
+
+                override fun onRtspStatusFailedUnauthorized() {
+                    Log.e(TAG, "X2D camera authentication failed")
+                    hasFirstFrame = false
+                    // The same LAN access code is used by MQTT, so repeated
+                    // retries cannot fix an authentication failure.
+                }
+
+                override fun onRtspStatusFailed(message: String?) {
+                    Log.w(TAG, "X2D RTSPS failure: ${message ?: "unknown error"}")
+                    hasFirstFrame = false
+                    if (streamStarted) scheduleRetry()
+                }
+
+                override fun onRtspFirstFrameRendered() {
                     hasFirstFrame = true
-                    applyVisibility()
                     Log.i(TAG, "X2D camera first frame rendered")
                 }
 
-                override fun onPlayerError(error: PlaybackException) {
-                    Log.w(TAG, "X2D camera playback error: ${error.errorCodeName}")
-                    hasFirstFrame = false
-                    applyVisibility()
-                    scheduleRetry()
-                }
-
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_ENDED) {
-                        scheduleRetry()
-                    }
+                override fun onRtspFrameSizeChanged(width: Int, height: Int) {
+                    Log.i(TAG, "X2D camera frame size ${width}x${height}")
                 }
             })
 
-            val mediaSource = RtspMediaSource.Factory()
-                .setSocketFactory(sslContext.socketFactory)
-                .setForceUseRtpTcp(true)
-                .createMediaSource(MediaItem.fromUri(url))
-
-            p.setMediaSource(mediaSource)
-            p.prepare()
-            p.playWhenReady = true
-            player = p
-            Log.i(TAG, "Connecting X2D camera on RTSPS port 322")
+            // Keep credentials separate from the URI so special characters in
+            // the LAN access code cannot corrupt URL parsing.
+            surface.init(
+                uri = uri,
+                username = "bblp",
+                password = accessCode,
+                userAgent = "BambooMobile-X2D",
+                socketTimeout = SOCKET_TIMEOUT_MS,
+            )
+            surface.start(
+                requestVideo = true,
+                requestAudio = false,
+                requestApplication = false,
+            )
+            streamStarted = true
         } catch (t: Throwable) {
-            Log.w(TAG, "Unable to start X2D camera", t)
+            Log.w(TAG, "Unable to start X2D RTSPS camera", t)
+            streamStarted = false
             scheduleRetry()
         }
     }
@@ -255,31 +259,28 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         val r = Runnable {
             retryRunnable = null
             if (container != null) {
-                releasePlayerOnly()
-                startPlayer()
+                releaseStreamOnly()
+                startStream()
             }
         }
         retryRunnable = r
         handler.postDelayed(r, RETRY_MS)
     }
 
-    private fun releasePlayerOnly() {
+    private fun releaseStreamOnly() {
         retryRunnable?.let(handler::removeCallbacks)
         retryRunnable = null
-        player?.let { p ->
-            try {
-                textureView?.let { p.clearVideoTextureView(it) }
-                p.release()
-            } catch (_: Throwable) {
-            }
+        try {
+            rtspView?.stop()
+            rtspView?.setStatusListener(null)
+        } catch (_: Throwable) {
         }
-        player = null
+        streamStarted = false
         hasFirstFrame = false
-        applyVisibility()
     }
 
     private fun stopInternal(removeView: Boolean) {
-        releasePlayerOnly()
+        releaseStreamOnly()
         requestedVisible = false
         if (removeView) {
             val box = container
@@ -287,7 +288,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 (box.parent as? ViewGroup)?.removeView(box)
             }
             container = null
-            textureView = null
+            rtspView = null
         }
         printerIp = ""
         accessCode = ""
