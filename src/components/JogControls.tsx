@@ -134,7 +134,7 @@ function ExtruderControl({ onMove }: { onMove: (mm: number) => void }) {
     'flex items-center justify-center w-10 h-10 rounded-xl bg-zinc-700 hover:bg-zinc-600 active:bg-teal-800 text-zinc-200 transition-colors';
 
   return (
-    <div className='grid grid-rows-[auto_auto_1fr_auto_auto] items-center justify-center h-full gap-2'>
+    <div className='grid grid-rows-[auto_auto_1fr_auto_auto] items-center justify-center h-full min-w-0 gap-2'>
       <button className={btn} onClick={() => onMove(10)}>
         <svg
           className='w-4 h-4'
@@ -197,7 +197,7 @@ function BedControl({ onMove }: { onMove: (mm: number) => void }) {
     'flex items-center justify-center w-10 h-10 rounded-xl bg-zinc-700 hover:bg-zinc-600 active:bg-teal-800 text-zinc-200 transition-colors';
 
   return (
-    <div className='grid grid-rows-[auto_auto_1fr_auto_auto] justify-center items-center gap-2 h-full'>
+    <div className='grid grid-rows-[auto_auto_1fr_auto_auto] justify-center items-center min-w-0 gap-2 h-full'>
       <button className={btn} onClick={() => onMove(-10)}>
         <svg
           className='w-4 h-4'
@@ -220,7 +220,7 @@ function BedControl({ onMove }: { onMove: (mm: number) => void }) {
           <path d='M5 15l7-7 7 7' />
         </svg>
       </button>
-      <span className='text-zinc-400 text-xs font-medium text-center shrink-0 px-1'>
+      <span className='text-zinc-400 text-xs font-medium text-center shrink-0 px-0.5'>
         Bed
       </span>
       <button className={btn} onClick={() => onMove(1)}>
@@ -263,9 +263,15 @@ export default function JogControls({
   }
 
   return (
-    <div className='flex flex-col gap-3'>
-      <div className='grid grid-cols-[3fr_1fr_1fr] gap-3 h-full'>
-        <div className='flex-1 aspect-square max-w-72'>
+    <div className='flex flex-col gap-3 w-full min-w-0 max-w-full overflow-x-hidden'>
+      {/*
+        Keep the two 40 px vertical control columns fixed and let only the XY
+        wheel shrink. The old 3fr/1fr/1fr grid used automatic minimum column
+        sizes, so the wheel's intrinsic square size could make the whole card
+        wider than a narrow Android WebView (notably the Pixel 11 Pro).
+      */}
+      <div className='grid grid-cols-[minmax(0,1fr)_2.5rem_2.5rem] gap-2 items-stretch w-full min-w-0 max-w-full'>
+        <div className='w-full min-w-0 aspect-square max-w-72 justify-self-start self-center'>
           <XYWheel
             onMove={(axis, mm) => move(axis, 3000, mm)}
             onHome={() => setConfirmHome(true)}
@@ -274,13 +280,13 @@ export default function JogControls({
         <ExtruderControl onMove={(mm) => move('E', 200, mm)} />
         <BedControl onMove={(mm) => move('Z', 300, mm)} />
       </div>
-      <p className='text-zinc-600 text-[10px]'>
+      <p className='text-zinc-600 text-[10px] break-words'>
         ⌂ homes all axes — do this before moving
       </p>
 
       {confirmHome && (
         <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/70'>
-          <div className='bg-zinc-800 border border-zinc-700 rounded-2xl p-6 mx-6 flex flex-col gap-4'>
+          <div className='bg-zinc-800 border border-zinc-700 rounded-2xl p-6 mx-6 flex flex-col gap-4 max-w-[calc(100vw-3rem)]'>
             <p className='text-white font-semibold text-base'>Home all axes?</p>
             <p className='text-zinc-400 text-sm'>
               The toolhead will move to the home position. Do not use while printing.
@@ -292,7 +298,10 @@ export default function JogControls({
                 Cancel
               </button>
               <button
-                onClick={() => { setConfirmHome(false); onGcode('G28'); }}
+                onClick={() => {
+                  setConfirmHome(false);
+                  onGcode('G28');
+                }}
                 className='flex-1 py-2.5 rounded-xl bg-red-800 hover:bg-red-700 text-white font-medium text-sm'>
                 Home
               </button>
