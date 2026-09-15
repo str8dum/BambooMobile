@@ -11,6 +11,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 # behavior must not depend on whether a particular incremental MQTT packet
 # happens to contain device.extruder.info. The configured X2D serial (20P...)
 # is authoritative for capabilities; telemetry still fills the live values.
+# This script is intentionally applied after the RC1/RC2 patch scripts in CI.
 
 # ── Rust backend: seed X2D capabilities from the configured serial ────────────
 lib = Path("src-tauri/src/lib.rs")
