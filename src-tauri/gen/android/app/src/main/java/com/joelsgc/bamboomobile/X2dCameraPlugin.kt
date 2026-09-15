@@ -25,7 +25,7 @@ import kotlin.math.roundToInt
  * X2D exposes H.264 over secure RTSP at:
  *   rtsps://bblp:<access-code>@<printer-ip>:322/streaming/live/1
  *
- * Bambu's camera uses a self-signed TLS certificate and RTSPS-over-TCP.  The
+ * Bambu's camera uses a self-signed TLS certificate and RTSPS-over-TCP. The
  * dedicated rtsp-client-android stack used here explicitly supports RTSPS,
  * Basic/Digest authentication, self-signed TLS, and H.264 MediaCodec rendering.
  *
@@ -37,7 +37,9 @@ import kotlin.math.roundToInt
 class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "X2dCamera"
-        private const val RETRY_MS = 3000L
+        private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
+        private const val RETRY_INITIAL_MS = 3_000L
+        private const val RETRY_MAX_MS = 30_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -45,12 +47,14 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     private var container: FrameLayout? = null
     private var rtspView: RtspSurfaceView? = null
     private var retryRunnable: Runnable? = null
+    private var firstFrameWatchdog: Runnable? = null
 
     private var printerIp: String = ""
     private var accessCode: String = ""
     private var requestedVisible = false
     private var streamStarted = false
     private var hasFirstFrame = false
+    private var retryDelayMs = RETRY_INITIAL_MS
 
     @Command
     fun showCamera(invoke: Invoke) {
@@ -80,6 +84,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
             if (!samePrinter) {
                 releaseStreamOnly()
+                retryDelayMs = RETRY_INITIAL_MS
                 startStream()
             }
             invoke.resolve()
@@ -185,6 +190,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
         retryRunnable?.let(handler::removeCallbacks)
         retryRunnable = null
+        cancelFirstFrameWatchdog()
         hasFirstFrame = false
 
         try {
@@ -204,12 +210,16 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
                 override fun onRtspStatusDisconnected() {
                     Log.w(TAG, "X2D RTSPS session disconnected")
+                    hasFirstFrame = false
+                    cancelFirstFrameWatchdog()
                     if (streamStarted) scheduleRetry()
                 }
 
                 override fun onRtspStatusFailedUnauthorized() {
                     Log.e(TAG, "X2D camera authentication failed")
                     hasFirstFrame = false
+                    streamStarted = false
+                    cancelFirstFrameWatchdog()
                     // The same LAN access code is used by MQTT, so repeated
                     // retries cannot fix an authentication failure.
                 }
@@ -217,12 +227,15 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 override fun onRtspStatusFailed(message: String?) {
                     Log.w(TAG, "X2D RTSPS failure: ${message ?: "unknown error"}")
                     hasFirstFrame = false
+                    cancelFirstFrameWatchdog()
                     if (streamStarted) scheduleRetry()
                 }
 
                 override fun onRtspFirstFrameRendered() {
                     hasFirstFrame = true
-                    Log.i(TAG, "X2D camera first frame rendered")
+                    cancelFirstFrameWatchdog()
+                    retryDelayMs = RETRY_INITIAL_MS
+                    Log.i(TAG, "X2D camera first frame rendered; retry backoff reset")
                 }
             })
 
@@ -234,22 +247,59 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 password = accessCode,
                 userAgent = "BambooMobile-X2D",
             )
+
+            // Mark the attempt active before start() so asynchronous failure
+            // callbacks can schedule a retry immediately.
+            streamStarted = true
             surface.start(
                 requestVideo = true,
                 requestAudio = false,
                 requestApplication = false,
             )
-            streamStarted = true
+            armFirstFrameWatchdog()
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to start X2D RTSPS camera", t)
             streamStarted = false
+            cancelFirstFrameWatchdog()
             scheduleRetry()
         }
     }
 
+    private fun armFirstFrameWatchdog() {
+        cancelFirstFrameWatchdog()
+        if (!streamStarted || hasFirstFrame || container == null) return
+
+        val watchdog = Runnable {
+            firstFrameWatchdog = null
+            if (container != null && streamStarted && !hasFirstFrame) {
+                Log.w(TAG, "No X2D camera frame within ${FIRST_FRAME_TIMEOUT_MS}ms; restarting stream")
+                releaseStreamOnly()
+                startStream()
+            }
+        }
+        firstFrameWatchdog = watchdog
+        handler.postDelayed(watchdog, FIRST_FRAME_TIMEOUT_MS)
+    }
+
+    private fun cancelFirstFrameWatchdog() {
+        firstFrameWatchdog?.let(handler::removeCallbacks)
+        firstFrameWatchdog = null
+    }
+
     private fun scheduleRetry() {
         if (container == null || printerIp.isBlank() || accessCode.isBlank()) return
-        retryRunnable?.let(handler::removeCallbacks)
+        if (retryRunnable != null) return
+
+        cancelFirstFrameWatchdog()
+        val delay = retryDelayMs
+        retryDelayMs = when {
+            retryDelayMs < 5_000L -> 5_000L
+            retryDelayMs < 10_000L -> 10_000L
+            retryDelayMs < 20_000L -> 20_000L
+            else -> RETRY_MAX_MS
+        }
+
+        Log.i(TAG, "Scheduling X2D camera retry in ${delay}ms")
         val r = Runnable {
             retryRunnable = null
             if (container != null) {
@@ -258,12 +308,13 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             }
         }
         retryRunnable = r
-        handler.postDelayed(r, RETRY_MS)
+        handler.postDelayed(r, delay)
     }
 
     private fun releaseStreamOnly() {
         retryRunnable?.let(handler::removeCallbacks)
         retryRunnable = null
+        cancelFirstFrameWatchdog()
         try {
             rtspView?.stop()
             rtspView?.setStatusListener(null)
@@ -275,6 +326,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun stopInternal(removeView: Boolean) {
         releaseStreamOnly()
+        retryDelayMs = RETRY_INITIAL_MS
         requestedVisible = false
         if (removeView) {
             val box = container
