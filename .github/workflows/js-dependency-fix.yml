@@ -1,0 +1,67 @@
+name: Fix Production JS Dependencies
+
+on:
+  push:
+    branches: [x2d-status]
+    paths:
+      - '.github/workflows/js-dependency-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: x2d-status
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Pin patched same-major dependency versions
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          p.devDependencies.vite = '^6.4.3';
+          p.pnpm = p.pnpm || {};
+          p.pnpm.overrides = {
+            ...(p.pnpm.overrides || {}),
+            vite: '6.4.3',
+            postcss: '8.5.18',
+            nanoid: '3.3.18'
+          };
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          NODE
+
+      - name: Regenerate lockfile
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify production build
+        run: pnpm build
+
+      - name: Verify production dependency audit
+        run: pnpm audit --prod --audit-level high
+
+      - name: Verify resolved versions
+        run: |
+          pnpm list vite postcss nanoid --depth 8
+          node -e "const p=require('./package.json'); console.log('overrides', p.pnpm.overrides)"
+
+      - name: Commit verified dependency fix
+        run: |
+          git config user.name "x2d-audit-bot"
+          git config user.email "x2d-audit-bot@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml
+          git commit -m "Fix high-severity production JS dependencies"
+          git push origin HEAD:x2d-status
