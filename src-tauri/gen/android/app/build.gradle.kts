@@ -67,8 +67,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
 
     // X2D liveview: dedicated RTSP/RTSPS-over-TCP client with MediaCodec rendering.
-    // This client explicitly supports Bambu's secure RTSPS transport and self-signed TLS.
-    implementation("com.github.alexeyvasilyev:rtsp-client-android:5.6.5")
+    // 5.6.4 targets compileSdk 36, matching this application.
+    implementation("com.github.alexeyvasilyev:rtsp-client-android:5.6.4")
 
     // Standalone MQTT client used by PrinterForegroundService when the Tauri
     // process is not running (e.g. after the user swipes the app away).
