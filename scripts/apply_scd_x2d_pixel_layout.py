@@ -164,4 +164,10 @@ index = index_path.read_text()
 index = index.replace('<title>BambooMobile</title>', '<title>SCD X2D</title>')
 index_path.write_text(index)
 
+# Apply the Silkie memorial popup last so it sees the final branded sidebar.
+memorial_patch = Path('scripts/apply_silkie_memorial.py')
+if not memorial_patch.exists():
+    raise SystemExit('Missing scripts/apply_silkie_memorial.py')
+exec(compile(memorial_patch.read_text(), str(memorial_patch), 'exec'))
+
 print('SCD X2D Pixel 20:9 responsive layout applied')
