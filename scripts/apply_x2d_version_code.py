@@ -1,10 +1,19 @@
+#!/usr/bin/env python3
+import json
+import os
 from pathlib import Path
-import os, re
-p = Path('src-tauri/gen/android/app/build.gradle.kts')
-v = os.environ['BAMBOO_X2D_VERSION_CODE']
-s = p.read_text()
-s, n = re.subn(r'versionCode\s*=\s*\d+', f'versionCode = {v}', s, count=1)
-if n != 1:
-    raise SystemExit('Could not patch Android versionCode')
-p.write_text(s)
-print(f'Forced Android versionCode={v}')
+
+v = os.environ.get('BAMBOO_X2D_VERSION_CODE', '').strip()
+if not v.isdigit():
+    raise SystemExit('BAMBOO_X2D_VERSION_CODE is missing or invalid')
+
+p = Path('src-tauri/tauri.conf.json')
+if not p.exists():
+    raise SystemExit(f'Missing {p}')
+
+data = json.loads(p.read_text(encoding='utf-8'))
+bundle = data.setdefault('bundle', {})
+android = bundle.setdefault('android', {})
+android['versionCode'] = int(v)
+p.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+print(f'Set Tauri Android versionCode={v}')
