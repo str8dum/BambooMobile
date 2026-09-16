@@ -1,20 +1,17 @@
 name: X2D Test APK
-
 on:
   push:
     branches: [x2d-status]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: Prepare stable signing and version
+      - name: Prepare persistent signing key
         shell: bash
         run: |
           set -euo pipefail
@@ -47,14 +44,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
-      - name: Force versionCode
+      - name: Set Android versionCode
         run: python3 scripts/apply_x2d_version_code.py
       - name: Build ARM64 debug APK
         shell: bash
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           pnpm tauri android build --debug --apk --target aarch64 --ci
-      - name: Verify signing certificate and versionCode
+      - name: Verify update compatibility
         shell: bash
         run: |
           set -euo pipefail
@@ -64,7 +61,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           APK_CERT=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
           KEY_CERT=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
-          echo "APK cert=$APK_CERT"; echo "KEY cert=$KEY_CERT"
+          echo "APK cert=$APK_CERT"; echo "Persistent cert=$KEY_CERT"
           test -n "$APK_CERT" && test "$APK_CERT" = "$KEY_CERT"
           BADGING=$($AAPT dump badging "$APK" | head -1); echo "$BADGING"
           echo "$BADGING" | grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'"
