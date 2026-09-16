@@ -33,6 +33,7 @@ jobs:
           python3 scripts/apply_scd_x2d_pixel_layout.py
           python3 scripts/apply_print_card_speed_button.py
           python3 scripts/apply_printer_panel_cleanup.py
+          python3 scripts/apply_scd_x2d_fans_splash.py
           python3 scripts/apply_scd_x2d_launcher_label.py
       - uses: actions/setup-java@v4
         with: { java-version: '17', distribution: temurin }
