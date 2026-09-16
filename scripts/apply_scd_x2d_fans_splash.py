@@ -8,9 +8,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 # ── Branded startup splash ───────────────────────────────────────────────────
-# App already connects to the printer while ConnectingScreen is mounted. Make
-# that screen an intentional SCD X2D splash and keep it visible for at least
-# 1.5 s on the first launch so the dashboard normally appears already populated.
 connecting = Path('src/pages/ConnectingScreen.tsx')
 connecting.write_text(r'''export default function ConnectingScreen({ ip: _ip }: { ip: string }) {
   return (
@@ -30,13 +27,11 @@ connecting.write_text(r'''export default function ConnectingScreen({ ip: _ip }: 
             className='relative h-40 w-40 rounded-[36px] border border-cyan-300/30 shadow-[0_0_48px_rgba(34,211,238,0.24),0_24px_70px_rgba(0,0,0,0.55)]'
           />
         </div>
-
         <div className='mt-8 flex items-baseline gap-2.5 leading-none'>
           <span className='text-3xl font-extrabold tracking-[0.12em] text-slate-100'>SCD</span>
           <span className='text-4xl font-black tracking-tight text-cyan-300'>X2D</span>
         </div>
         <div className='mt-3 text-xs font-semibold uppercase tracking-[0.30em] text-slate-500'>Printer Control</div>
-
         <div className='mt-12 flex items-center gap-3 rounded-full border border-cyan-400/15 bg-[#07111d]/80 px-5 py-3 shadow-lg'>
           <span className='h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.9)] animate-pulse' />
           <span className='text-sm font-semibold tracking-wide text-slate-300'>Connecting…</span>
@@ -83,23 +78,18 @@ app_path.write_text(a)
 
 
 # ── Fan telemetry ─────────────────────────────────────────────────────────────
-# X2D reports fan state both through the legacy flat fields and through
-# device.airduct.parts. The latter is needed for the second auxiliary fan.
 lib_path = Path('src-tauri/src/lib.rs')
 s = lib_path.read_text()
 s = replace_once(
     s,
-    """    // True when the printer reports a LAN RTSP/RTSPS liveview URL.
-    pub camera_rtsp_enabled: bool,
-    pub bed_temp: f64,""",
-    """    // True when the printer reports a LAN RTSP/RTSPS liveview URL.
-    pub camera_rtsp_enabled: bool,
+    "    pub camera_rtsp_enabled: bool,\n",
+    """    pub camera_rtsp_enabled: bool,
     // X2D fan telemetry, normalized to 0-100 percent.
     pub part_fan_percent: u8,
     pub aux_left_fan_percent: u8,
     pub aux_right_fan_percent: u8,
     pub exhaust_fan_percent: u8,
-    pub bed_temp: f64,""",
+""",
     'fan status fields',
 )
 
@@ -149,10 +139,10 @@ fan_parser = r'''
             let (Some(id), Some(raw)) = (id, raw) else { continue };
             let pct = fan_percent(raw);
             match id {
-                16 => status.part_fan_percent = pct,      // M106 P1
-                32 => status.aux_left_fan_percent = pct, // M106 P2
-                160 => status.aux_right_fan_percent = pct, // M106 P10
-                48 => status.exhaust_fan_percent = pct,  // M106 P3
+                16 => status.part_fan_percent = pct,
+                32 => status.aux_left_fan_percent = pct,
+                160 => status.aux_right_fan_percent = pct,
+                48 => status.exhaust_fan_percent = pct,
                 _ => {}
             }
         }
@@ -171,14 +161,13 @@ vite_path = Path('src/vite-env.d.ts')
 v = vite_path.read_text()
 v = replace_once(
     v,
-    """  camera_rtsp_enabled: boolean;
-  bed_temp: number;""",
+    "  camera_rtsp_enabled: boolean;\n",
     """  camera_rtsp_enabled: boolean;
   part_fan_percent: number;
   aux_left_fan_percent: number;
   aux_right_fan_percent: number;
   exhaust_fan_percent: number;
-  bed_temp: number;""",
+""",
     'TypeScript fan status fields',
 )
 vite_path.write_text(v)
@@ -196,10 +185,10 @@ type FanValues = {
 };
 
 const FAN_ROWS = [
-  { key: 'part' as const, label: 'Part Cooling', short: 'PART', p: 1 },
-  { key: 'auxLeft' as const, label: 'Aux Left', short: 'AUX L', p: 2 },
-  { key: 'auxRight' as const, label: 'Aux Right', short: 'AUX R', p: 10 },
-  { key: 'exhaust' as const, label: 'Exhaust', short: 'EXH', p: 3 },
+  { key: 'part' as const, label: 'Part Cooling', p: 1 },
+  { key: 'auxLeft' as const, label: 'Aux Left', p: 2 },
+  { key: 'auxRight' as const, label: 'Aux Right', p: 10 },
+  { key: 'exhaust' as const, label: 'Exhaust', p: 3 },
 ];
 
 function clamp(value: number) {
@@ -329,8 +318,6 @@ d = replace_once(
     "import TempGauge from '../components/TempGauge';\nimport FanControl from '../components/FanControl';",
     'FanControl import',
 )
-
-# Replace the legacy active-nozzle temperature tile below the dual-nozzle row.
 marker = "                    actual={status.nozzle_temp}"
 marker_i = d.find(marker)
 if marker_i < 0:
