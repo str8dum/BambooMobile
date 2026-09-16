@@ -1,7 +1,7 @@
 from pathlib import Path
 
 # This script is also part of the full-audit trigger set; touching it here
-# ensures the audited run includes the Media3 Android camera dependency fix.
+# ensures the audited run includes the final Android camera/compile fixes.
 lib_path = Path("src-tauri/src/lib.rs")
 s = lib_path.read_text()
 
@@ -29,4 +29,12 @@ after = s[unload_start:].replace(needle, replacement, 1)
 s = before + after
 
 lib_path.write_text(s)
+
+# Keep camera-only pinch zoom in the same exact production patch stack used by
+# both test and audited APKs. The zoom patch is idempotent, so workflows that
+# invoke it explicitly after this step remain safe.
+zoom_patch = Path("scripts/apply_x2d_camera_zoom.py")
+namespace = {"__name__": "__main__", "__file__": str(zoom_patch)}
+exec(compile(zoom_patch.read_text(), str(zoom_patch), "exec"), namespace)
+
 print("X2D final compile regression fixed")
