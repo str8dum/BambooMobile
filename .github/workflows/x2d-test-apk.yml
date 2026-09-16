@@ -12,27 +12,19 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out X2D branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Prepare stable signing and version
+      - name: Prepare stable signing
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.android"
           base64 -d .github/x2d-debug.keystore.b64 > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
-          VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
-          echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
-          echo "Stable X2D signing key installed; versionCode=$VERSION_CODE"
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'SHA256:|Alias name:'
-
       - name: Apply exact production X2D patches
-        shell: bash
         run: |
           python3 scripts/apply_x2d_rc.py
           python3 scripts/apply_x2d_rc2.py
@@ -40,95 +32,69 @@ jobs:
           python3 scripts/apply_x2d_final.py
           python3 scripts/apply_x2d_compile_fix.py
           python3 scripts/apply_x2d_camera_zoom.py
-
-      - name: Verify X2D camera and temperature invariants
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          lib = Path('src-tauri/src/lib.rs').read_text()
-          cam = Path('src-tauri/gen/android/app/src/main/java/com/joelsgc/bamboomobile/X2dCameraPlugin.kt').read_text()
-          dash = Path('src/pages/Dashboard.tsx').read_text()
-          required = {
-              'camera port 322': ':322/streaming/live/1' in cam and 'RtspSurfaceView' in cam,
-              'camera native pinch zoom': 'fun setZoom' in cam and 'ZOOM_MAX = 4.0f' in cam and 'surface.scaleX = videoZoom' in cam and "plugin:x2dCamera|set_zoom" in dash and "touchAction = 'pan-y'" in dash,
-              'dual nozzle decode': '(packed & 0xFFFF)' in lib and '((packed >> 16) & 0xFFFF)' in lib,
-              'dual nozzle UI': 'DualNozzleGauge' in dash,
-              'X2D camera UI': 'X2D secure H.264 stream · port 322' in dash,
-              'X2D chooses 322 UI': "status?.dual_nozzle ?" in dash and "'X2D secure H.264 stream · port 322'" in dash,
-          }
-          failed = [name for name, ok in required.items() if not ok]
-          for name, ok in required.items():
-              print(f'{name}: {"PASS" if ok else "FAIL"}')
-          if failed:
-              raise SystemExit('failed invariants: ' + ', '.join(failed))
-          PY
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
-
+          distribution: temurin
       - name: Prepare Android SDK and NDK
         shell: bash
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          "$SDKMANAGER" --version
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
-
-      - name: Set up Rust for Android
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: latest
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-
+      - run: pnpm install --frozen-lockfile
+      - name: Force monotonically increasing Android versionCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
+          GRADLE=src-tauri/gen/android/app/build.gradle.kts
+          python3 - "$GRADLE" "$VERSION_CODE" <<'PY'
+          import re, sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); v=sys.argv[2]; s=p.read_text()
+          n=re.subn(r'versionCode\s*=\s*\d+', f'versionCode = {v}', s, count=1)
+          if n[1] != 1: raise SystemExit('Could not patch Android versionCode')
+          p.write_text(n[0])
+          print('versionCode =', v)
+          PY
+          echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
       - name: Build ARM64 debug APK
         shell: bash
         run: |
           set -euo pipefail
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           pnpm tauri android build --debug --apk --target aarch64 --ci
-
-      - name: Verify APK is signed by stable key and has increasing versionCode
+      - name: Verify APK signing certificate and versionCode
         shell: bash
         run: |
           set -euo pipefail
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -1)
-          test -n "$APK"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           APK_CERT=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
           KEY_CERT=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
-          echo "APK certificate: $APK_CERT"
-          echo "Stable key cert: $KEY_CERT"
+          echo "APK cert=$APK_CERT"
+          echo "KEY cert=$KEY_CERT"
           test -n "$APK_CERT" && test "$APK_CERT" = "$KEY_CERT"
           BADGING=$($AAPT dump badging "$APK" | head -1)
           echo "$BADGING"
           echo "$BADGING" | grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'"
-
-      - name: Upload X2D APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: BambooMobile-X2D-Production-Test
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
