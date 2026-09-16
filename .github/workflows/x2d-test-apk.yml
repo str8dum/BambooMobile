@@ -22,13 +22,14 @@ jobs:
       - name: Prepare stable signing and version
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.android"
           base64 -d .github/x2d-debug.keystore.b64 > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
           VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
           echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "Stable X2D signing key installed; versionCode=$VERSION_CODE"
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'SHA256:|Alias name:'
 
       - name: Apply exact production X2D patches
         shell: bash
@@ -104,12 +105,27 @@ jobs:
       - name: Build ARM64 debug APK
         shell: bash
         run: |
+          set -euo pipefail
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           pnpm tauri android build --debug --apk --target aarch64 --ci
 
-      - name: Show generated APKs
-        if: always()
-        run: find src-tauri/gen/android/app/build/outputs -type f -name "*.apk" -print || true
+      - name: Verify APK is signed by stable key and has increasing versionCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -1)
+          test -n "$APK"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          APK_CERT=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
+          KEY_CERT=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "APK certificate: $APK_CERT"
+          echo "Stable key cert: $KEY_CERT"
+          test -n "$APK_CERT" && test "$APK_CERT" = "$KEY_CERT"
+          BADGING=$($AAPT dump badging "$APK" | head -1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'"
 
       - name: Upload X2D APK
         uses: actions/upload-artifact@v4
