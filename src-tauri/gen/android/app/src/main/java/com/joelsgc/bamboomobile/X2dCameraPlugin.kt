@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
  *
  * The player renders into a native SurfaceView layered directly over the
  * WebView's camera card. JavaScript sends the card bounds whenever it moves or
- * resizes.
+ * resizes and sends camera-only pinch zoom independently of WebView page zoom.
  */
 @TauriPlugin
 class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
@@ -40,6 +40,8 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         private const val FIRST_FRAME_TIMEOUT_MS = 12_000L
         private const val RETRY_INITIAL_MS = 3_000L
         private const val RETRY_MAX_MS = 30_000L
+        private const val ZOOM_MIN = 1.0f
+        private const val ZOOM_MAX = 4.0f
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -55,6 +57,9 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     private var streamStarted = false
     private var hasFirstFrame = false
     private var retryDelayMs = RETRY_INITIAL_MS
+    private var videoZoom = ZOOM_MIN
+    private var zoomFocusX = 0.5f
+    private var zoomFocusY = 0.5f
 
     @Command
     fun showCamera(invoke: Invoke) {
@@ -108,6 +113,34 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun setZoom(invoke: Invoke) {
+        val args = invoke.getArgs()
+        val requestedZoom = args.optDouble("zoom", ZOOM_MIN.toDouble())
+        val requestedFocusX = args.optDouble("focusX", 0.5)
+        val requestedFocusY = args.optDouble("focusY", 0.5)
+
+        activity.runOnUiThread {
+            videoZoom = if (requestedZoom.isFinite()) {
+                requestedZoom.toFloat().coerceIn(ZOOM_MIN, ZOOM_MAX)
+            } else {
+                ZOOM_MIN
+            }
+            zoomFocusX = if (requestedFocusX.isFinite()) {
+                requestedFocusX.toFloat().coerceIn(0.0f, 1.0f)
+            } else {
+                0.5f
+            }
+            zoomFocusY = if (requestedFocusY.isFinite()) {
+                requestedFocusY.toFloat().coerceIn(0.0f, 1.0f)
+            } else {
+                0.5f
+            }
+            applyVideoZoom()
+            invoke.resolve()
+        }
+    }
+
+    @Command
     fun hideCamera(invoke: Invoke) {
         activity.runOnUiThread {
             stopInternal(removeView = true)
@@ -131,6 +164,8 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.VISIBLE
             elevation = 100f
+            clipChildren = true
+            clipToPadding = true
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(Color.BLACK)
@@ -158,6 +193,8 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
         container = box
         rtspView = surface
+        box.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyVideoZoom() }
+        box.post { applyVideoZoom() }
     }
 
     private fun updateBoundsNative(
@@ -176,12 +213,23 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         lp.topMargin = (y * scale).roundToInt()
         box.layoutParams = lp
         requestedVisible = visible
+        box.post { applyVideoZoom() }
 
         // Do not set a SurfaceView parent to INVISIBLE while streaming. Android
         // destroys its Surface in that state, which would stop the decoder. The
         // element is physically positioned with the web card and is removed when
         // the camera page/sidebar is no longer active.
         box.visibility = View.VISIBLE
+    }
+
+    private fun applyVideoZoom() {
+        val surface = rtspView ?: return
+        if (surface.width <= 0 || surface.height <= 0) return
+
+        surface.pivotX = surface.width.toFloat() * zoomFocusX
+        surface.pivotY = surface.height.toFloat() * zoomFocusY
+        surface.scaleX = videoZoom
+        surface.scaleY = videoZoom
     }
 
     private fun startStream() {
@@ -328,6 +376,9 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         releaseStreamOnly()
         retryDelayMs = RETRY_INITIAL_MS
         requestedVisible = false
+        videoZoom = ZOOM_MIN
+        zoomFocusX = 0.5f
+        zoomFocusY = 0.5f
         if (removeView) {
             val box = container
             if (box != null) {
