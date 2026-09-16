@@ -126,3 +126,4 @@ d = replace_once(d, marker, marker + zoom_effect, "X2D camera effect")
 dash_path.write_text(d)
 
 print("X2D camera-only pinch zoom patch applied")
+# Build trigger: native X2D pinch zoom + update-compatible APK verification.
