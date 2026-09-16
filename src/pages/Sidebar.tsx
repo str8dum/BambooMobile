@@ -89,19 +89,19 @@ export default function Sidebar({
           open ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-        <div className='flex items-center justify-between px-4 py-3.5 border-b border-cyan-400/15'>
-          <div className='flex min-w-0 items-center gap-2.5'>
+        <div className='flex items-center justify-between px-4 py-4 border-b border-cyan-400/15'>
+          <div className='flex min-w-0 items-center gap-3'>
             <img
               src='/scd-x2d-icon.png'
               alt='SCD X2D'
-              className='h-9 w-9 shrink-0 rounded-xl border border-cyan-300/25 shadow-[0_0_14px_rgba(34,211,238,0.16)]'
+              className='h-14 w-14 shrink-0 rounded-2xl border border-cyan-300/30 shadow-[0_0_20px_rgba(34,211,238,0.22)]'
             />
             <div className='min-w-0 leading-none'>
               <div className='flex items-baseline gap-1.5'>
-                <span className='text-sm font-extrabold tracking-[0.12em] text-slate-100'>SCD</span>
-                <span className='text-lg font-black tracking-tight text-cyan-300'>X2D</span>
+                <span className='text-lg font-extrabold tracking-[0.10em] text-slate-100'>SCD</span>
+                <span className='text-2xl font-black tracking-tight text-cyan-300'>X2D</span>
               </div>
-              <div className='mt-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500'>Printer Control</div>
+              <div className='mt-1.5 text-[10px] font-semibold uppercase tracking-[0.17em] text-slate-500'>Printer Control</div>
             </div>
           </div>
           <button
