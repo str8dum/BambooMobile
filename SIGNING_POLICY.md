@@ -1,3 +1,3 @@
-# X2D APK update compatibility
+# X2D update-safe APK builds
 
-X2D builds use `.github/x2d-debug.keystore.b64` as the persistent signing identity and an increasing Android `versionCode`. CI verifies both the completed APK certificate and packaged versionCode before uploading an artifact. Never regenerate or replace the signing key.
+Use `.github/x2d-debug.keystore.b64` for every X2D APK. Keep versionCode increasing. CI verifies the final APK certificate and versionCode before artifact upload. Do not regenerate the key.
