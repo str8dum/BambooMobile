@@ -15,6 +15,10 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 dash_path = Path("src/pages/Dashboard.tsx")
 d = dash_path.read_text()
 
+if "plugin:x2dCamera|set_zoom" in d:
+    print("X2D camera-only pinch zoom patch already applied")
+    raise SystemExit(0)
+
 marker = "  }, [status?.dual_nozzle, ip, accessCode, cameraVisible]);\n"
 zoom_effect = r'''
 
