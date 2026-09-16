@@ -1,9 +1,9 @@
 # X2D APK update compatibility
 
-The X2D test and audited workflows use `.github/x2d-debug.keystore.b64` as the persistent Android signing key. The key is installed as `$HOME/.android/debug.keystore` before every build.
+All X2D APKs are signed with the persistent repository key `.github/x2d-debug.keystore.b64`, installed as `$HOME/.android/debug.keystore` before the Android build.
 
-Every build receives a monotonically increasing Android `versionCode` using `scripts/apply_x2d_version_code.py`.
+Every build gets a monotonically increasing Android `versionCode` through `scripts/apply_x2d_version_code.py`.
 
-CI verifies the finished APK certificate with `apksigner` against the persistent keystore and verifies the packaged `versionCode` with `aapt` before uploading the artifact. A mismatch fails the workflow.
+Before publishing, CI uses `apksigner` to verify the APK certificate matches the persistent key and `aapt` to verify the packaged versionCode. Any mismatch fails the workflow, so an incorrectly signed or stale-version APK is not published.
 
-Never regenerate or replace `.github/x2d-debug.keystore.b64`. A different signing certificate cannot update an app installed with the established certificate.
+Do not regenerate, replace, or remove `.github/x2d-debug.keystore.b64`; Android cannot install an APK signed by a different certificate over an existing installation.
