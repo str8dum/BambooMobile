@@ -38,6 +38,7 @@ jobs:
           python3 scripts/apply_x2d_audit_fixes.py
           python3 scripts/apply_x2d_final.py
           python3 scripts/apply_x2d_compile_fix.py
+          python3 scripts/apply_x2d_camera_zoom.py
 
       - name: Verify X2D camera and temperature invariants
         shell: bash
@@ -49,6 +50,7 @@ jobs:
           dash = Path('src/pages/Dashboard.tsx').read_text()
           required = {
               'camera port 322': ':322/streaming/live/1' in cam and 'RtspSurfaceView' in cam,
+              'camera native pinch zoom': 'fun setZoom' in cam and 'ZOOM_MAX = 4.0f' in cam and 'surface.scaleX = videoZoom' in cam and "plugin:x2dCamera|set_zoom" in dash and "touchAction = 'pan-y'" in dash,
               'dual nozzle decode': '(packed & 0xFFFF)' in lib and '((packed >> 16) & 0xFFFF)' in lib,
               'dual nozzle UI': 'DualNozzleGauge' in dash,
               'X2D camera UI': 'X2D secure H.264 stream · port 322' in dash,
