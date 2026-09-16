@@ -28,6 +28,7 @@ jobs:
           python3 scripts/apply_x2d_compile_fix.py
           python3 scripts/apply_x2d_camera_zoom.py
           python3 scripts/apply_scd_x2d_branding.py
+          python3 scripts/apply_scd_x2d_camera_controls.py
       - uses: actions/setup-java@v4
         with: { java-version: '17', distribution: temurin }
       - name: Android SDK
