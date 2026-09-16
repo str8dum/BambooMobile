@@ -25,8 +25,21 @@ android {
             ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+
+    // X2D test builds must always use the repository's persistent debug key so
+    // each new APK can update the previous installation without clearing data.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".x2d2"
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
