@@ -1,2 +1,1 @@
-Persistent X2D Android update signing key: .github/x2d-debug.keystore.b64
-DO NOT REGENERATE OR REPLACE. CI verifies each final APK against this certificate before artifact upload.
+Persistent X2D Android update key: .github/x2d-debug.keystore.b64. Never replace or regenerate it. CI checks the final APK certificate before upload.
