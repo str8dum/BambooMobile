@@ -2,8 +2,7 @@ name: X2D Test APK
 
 on:
   push:
-    branches:
-      - x2d-status
+    branches: [x2d-status]
   workflow_dispatch:
 
 permissions:
@@ -14,17 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Prepare stable signing
+        with: { fetch-depth: 0 }
+      - name: Prepare stable signing and version
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.android"
           base64 -d .github/x2d-debug.keystore.b64 > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
-          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'SHA256:|Alias name:'
-      - name: Apply exact production X2D patches
+          echo "BAMBOO_X2D_VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
+      - name: Apply production X2D patches
         run: |
           python3 scripts/apply_x2d_rc.py
           python3 scripts/apply_x2d_rc2.py
@@ -33,52 +31,30 @@ jobs:
           python3 scripts/apply_x2d_compile_fix.py
           python3 scripts/apply_x2d_camera_zoom.py
       - uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: temurin
-      - name: Prepare Android SDK and NDK
+        with: { java-version: '17', distribution: temurin }
+      - name: Android SDK
         shell: bash
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
+        with: { targets: aarch64-linux-android }
       - uses: pnpm/action-setup@v4
-        with:
-          version: latest
+        with: { version: latest }
       - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: pnpm
+        with: { node-version: '22', cache: pnpm }
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+        with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
-      - name: Force monotonically increasing Android versionCode
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))
-          GRADLE=src-tauri/gen/android/app/build.gradle.kts
-          python3 - "$GRADLE" "$VERSION_CODE" <<'PY'
-          import re, sys
-          from pathlib import Path
-          p=Path(sys.argv[1]); v=sys.argv[2]; s=p.read_text()
-          n=re.subn(r'versionCode\s*=\s*\d+', f'versionCode = {v}', s, count=1)
-          if n[1] != 1: raise SystemExit('Could not patch Android versionCode')
-          p.write_text(n[0])
-          print('versionCode =', v)
-          PY
-          echo "BAMBOO_X2D_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+      - name: Force versionCode
+        run: python3 scripts/apply_x2d_version_code.py
       - name: Build ARM64 debug APK
         shell: bash
         run: |
-          set -euo pipefail
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           pnpm tauri android build --debug --apk --target aarch64 --ci
-      - name: Verify APK signing certificate and versionCode
+      - name: Verify signing certificate and versionCode
         shell: bash
         run: |
           set -euo pipefail
@@ -88,11 +64,9 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           APK_CERT=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
           KEY_CERT=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
-          echo "APK cert=$APK_CERT"
-          echo "KEY cert=$KEY_CERT"
+          echo "APK cert=$APK_CERT"; echo "KEY cert=$KEY_CERT"
           test -n "$APK_CERT" && test "$APK_CERT" = "$KEY_CERT"
-          BADGING=$($AAPT dump badging "$APK" | head -1)
-          echo "$BADGING"
+          BADGING=$($AAPT dump badging "$APK" | head -1); echo "$BADGING"
           echo "$BADGING" | grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'"
       - uses: actions/upload-artifact@v4
         with:
