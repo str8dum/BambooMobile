@@ -28,6 +28,9 @@ jobs:
           python3 scripts/apply_x2d_final.py
           python3 scripts/apply_x2d_compile_fix.py
           python3 scripts/apply_x2d_camera_zoom.py
+          python3 scripts/apply_scd_x2d_branding.py
+          python3 scripts/apply_scd_x2d_camera_controls.py
+          python3 scripts/apply_scd_x2d_pixel_layout.py
       - uses: actions/setup-java@v4
         with: { java-version: '17', distribution: temurin }
       - name: Android SDK
@@ -64,6 +67,6 @@ jobs:
           echo "$BADGING" | grep -q "versionCode='$BAMBOO_X2D_VERSION_CODE'"
       - uses: actions/upload-artifact@v4
         with:
-          name: BambooMobile-X2D-Audited
+          name: SCD-X2D-Audited
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
