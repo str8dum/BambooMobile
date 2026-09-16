@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -25,13 +27,9 @@ import kotlin.math.roundToInt
  * X2D exposes H.264 over secure RTSP at:
  *   rtsps://bblp:<access-code>@<printer-ip>:322/streaming/live/1
  *
- * Bambu's camera uses a self-signed TLS certificate and RTSPS-over-TCP. The
- * dedicated rtsp-client-android stack used here explicitly supports RTSPS,
- * Basic/Digest authentication, self-signed TLS, and H.264 MediaCodec rendering.
- *
  * The player renders into a native SurfaceView layered directly over the
- * WebView's camera card. JavaScript sends the card bounds whenever it moves or
- * resizes and sends camera-only pinch zoom independently of WebView page zoom.
+ * WebView's camera card. Pinch zoom is handled natively on that overlay because
+ * touch events over a SurfaceView cannot reliably reach the WebView below it.
  */
 @TauriPlugin
 class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
@@ -45,11 +43,11 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-
     private var container: FrameLayout? = null
     private var rtspView: RtspSurfaceView? = null
     private var retryRunnable: Runnable? = null
     private var firstFrameWatchdog: Runnable? = null
+    private var scaleDetector: ScaleGestureDetector? = null
 
     private var printerIp: String = ""
     private var accessCode: String = ""
@@ -79,14 +77,11 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.resolve()
                 return@runOnUiThread
             }
-
             val samePrinter = printerIp == ip && accessCode == code && streamStarted
             printerIp = ip
             accessCode = code
-
             ensureView()
             updateBoundsNative(x, y, width, height, scale, visible)
-
             if (!samePrinter) {
                 releaseStreamOnly()
                 retryDelayMs = RETRY_INITIAL_MS
@@ -105,7 +100,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         val height = args.optDouble("height", 0.0)
         val scale = args.optDouble("scale", 1.0).coerceAtLeast(0.1)
         val visible = args.optBoolean("visible", true)
-
         activity.runOnUiThread {
             updateBoundsNative(x, y, width, height, scale, visible)
             invoke.resolve()
@@ -118,23 +112,10 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         val requestedZoom = args.optDouble("zoom", ZOOM_MIN.toDouble())
         val requestedFocusX = args.optDouble("focusX", 0.5)
         val requestedFocusY = args.optDouble("focusY", 0.5)
-
         activity.runOnUiThread {
-            videoZoom = if (requestedZoom.isFinite()) {
-                requestedZoom.toFloat().coerceIn(ZOOM_MIN, ZOOM_MAX)
-            } else {
-                ZOOM_MIN
-            }
-            zoomFocusX = if (requestedFocusX.isFinite()) {
-                requestedFocusX.toFloat().coerceIn(0.0f, 1.0f)
-            } else {
-                0.5f
-            }
-            zoomFocusY = if (requestedFocusY.isFinite()) {
-                requestedFocusY.toFloat().coerceIn(0.0f, 1.0f)
-            } else {
-                0.5f
-            }
+            videoZoom = if (requestedZoom.isFinite()) requestedZoom.toFloat().coerceIn(ZOOM_MIN, ZOOM_MAX) else ZOOM_MIN
+            zoomFocusX = if (requestedFocusX.isFinite()) requestedFocusX.toFloat().coerceIn(0.0f, 1.0f) else 0.5f
+            zoomFocusY = if (requestedFocusY.isFinite()) requestedFocusY.toFloat().coerceIn(0.0f, 1.0f) else 0.5f
             applyVideoZoom()
             invoke.resolve()
         }
@@ -150,16 +131,14 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun ensureView() {
         if (container != null && rtspView != null) return
-
         val root = activity.findViewById<ViewGroup>(android.R.id.content) as? FrameLayout
         if (root == null) {
             Log.e(TAG, "android.R.id.content is not a FrameLayout")
             return
         }
-
         val density = activity.resources.displayMetrics.density
         val box = FrameLayout(activity).apply {
-            isClickable = false
+            isClickable = true
             isFocusable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.VISIBLE
@@ -173,23 +152,34 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             }
             clipToOutline = true
         }
-
         val surface = RtspSurfaceView(activity).apply {
             isClickable = false
             isFocusable = false
-            // Keep the hardware-decoded video above the Tauri WebView while the
-            // parent FrameLayout constrains it to the camera-card bounds.
             setZOrderOnTop(true)
         }
-
-        box.addView(
-            surface,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
+        box.addView(surface, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(box, FrameLayout.LayoutParams(1, 1))
+
+        val detector = ScaleGestureDetector(activity, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean = true
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val w = box.width.toFloat().coerceAtLeast(1f)
+                val h = box.height.toFloat().coerceAtLeast(1f)
+                videoZoom = (videoZoom * detector.scaleFactor).coerceIn(ZOOM_MIN, ZOOM_MAX)
+                zoomFocusX = (detector.focusX / w).coerceIn(0f, 1f)
+                zoomFocusY = (detector.focusY / h).coerceIn(0f, 1f)
+                applyVideoZoom()
+                return true
+            }
+        })
+        scaleDetector = detector
+        box.setOnTouchListener { _, event ->
+            detector.onTouchEvent(event)
+            // The native camera overlay owns multi-touch. Consuming the gesture here
+            // is what makes pinch reliable instead of expecting the WebView underneath
+            // the SurfaceView to receive the same pointers.
+            event.pointerCount > 1 || detector.isInProgress || event.actionMasked == MotionEvent.ACTION_UP
+        }
 
         container = box
         rtspView = surface
@@ -197,14 +187,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         box.post { applyVideoZoom() }
     }
 
-    private fun updateBoundsNative(
-        x: Double,
-        y: Double,
-        width: Double,
-        height: Double,
-        scale: Double,
-        visible: Boolean,
-    ) {
+    private fun updateBoundsNative(x: Double, y: Double, width: Double, height: Double, scale: Double, visible: Boolean) {
         val box = container ?: return
         val lp = box.layoutParams as? FrameLayout.LayoutParams ?: return
         lp.width = max(1, (width * scale).roundToInt())
@@ -214,18 +197,12 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         box.layoutParams = lp
         requestedVisible = visible
         box.post { applyVideoZoom() }
-
-        // Do not set a SurfaceView parent to INVISIBLE while streaming. Android
-        // destroys its Surface in that state, which would stop the decoder. The
-        // element is physically positioned with the web card and is removed when
-        // the camera page/sidebar is no longer active.
         box.visibility = View.VISIBLE
     }
 
     private fun applyVideoZoom() {
         val surface = rtspView ?: return
         if (surface.width <= 0 || surface.height <= 0) return
-
         surface.pivotX = surface.width.toFloat() * zoomFocusX
         surface.pivotY = surface.height.toFloat() * zoomFocusY
         surface.scaleX = videoZoom
@@ -235,50 +212,34 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     private fun startStream() {
         val surface = rtspView ?: return
         if (printerIp.isBlank() || accessCode.isBlank()) return
-
         retryRunnable?.let(handler::removeCallbacks)
         retryRunnable = null
         cancelFirstFrameWatchdog()
         hasFirstFrame = false
-
         try {
             val uri = Uri.parse("rtsps://$printerIp:322/streaming/live/1")
             surface.setStatusListener(object : RtspStatusListener {
-                override fun onRtspStatusConnecting() {
-                    Log.i(TAG, "Connecting X2D camera on RTSPS port 322")
-                }
-
-                override fun onRtspStatusConnected() {
-                    Log.i(TAG, "X2D RTSPS session connected")
-                }
-
-                override fun onRtspStatusDisconnecting() {
-                    Log.i(TAG, "X2D RTSPS session disconnecting")
-                }
-
+                override fun onRtspStatusConnecting() { Log.i(TAG, "Connecting X2D camera on RTSPS port 322") }
+                override fun onRtspStatusConnected() { Log.i(TAG, "X2D RTSPS session connected") }
+                override fun onRtspStatusDisconnecting() { Log.i(TAG, "X2D RTSPS session disconnecting") }
                 override fun onRtspStatusDisconnected() {
                     Log.w(TAG, "X2D RTSPS session disconnected")
                     hasFirstFrame = false
                     cancelFirstFrameWatchdog()
                     if (streamStarted) scheduleRetry()
                 }
-
                 override fun onRtspStatusFailedUnauthorized() {
                     Log.e(TAG, "X2D camera authentication failed")
                     hasFirstFrame = false
                     streamStarted = false
                     cancelFirstFrameWatchdog()
-                    // The same LAN access code is used by MQTT, so repeated
-                    // retries cannot fix an authentication failure.
                 }
-
                 override fun onRtspStatusFailed(message: String?) {
                     Log.w(TAG, "X2D RTSPS failure: ${message ?: "unknown error"}")
                     hasFirstFrame = false
                     cancelFirstFrameWatchdog()
                     if (streamStarted) scheduleRetry()
                 }
-
                 override fun onRtspFirstFrameRendered() {
                     hasFirstFrame = true
                     cancelFirstFrameWatchdog()
@@ -286,24 +247,9 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
                     Log.i(TAG, "X2D camera first frame rendered; retry backoff reset")
                 }
             })
-
-            // Keep credentials separate from the URI so special characters in
-            // the LAN access code cannot corrupt URL parsing.
-            surface.init(
-                uri = uri,
-                username = "bblp",
-                password = accessCode,
-                userAgent = "BambooMobile-X2D",
-            )
-
-            // Mark the attempt active before start() so asynchronous failure
-            // callbacks can schedule a retry immediately.
+            surface.init(uri = uri, username = "bblp", password = accessCode, userAgent = "BambooMobile-X2D")
             streamStarted = true
-            surface.start(
-                requestVideo = true,
-                requestAudio = false,
-                requestApplication = false,
-            )
+            surface.start(requestVideo = true, requestAudio = false, requestApplication = false)
             armFirstFrameWatchdog()
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to start X2D RTSPS camera", t)
@@ -316,7 +262,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     private fun armFirstFrameWatchdog() {
         cancelFirstFrameWatchdog()
         if (!streamStarted || hasFirstFrame || container == null) return
-
         val watchdog = Runnable {
             firstFrameWatchdog = null
             if (container != null && streamStarted && !hasFirstFrame) {
@@ -337,7 +282,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
     private fun scheduleRetry() {
         if (container == null || printerIp.isBlank() || accessCode.isBlank()) return
         if (retryRunnable != null) return
-
         cancelFirstFrameWatchdog()
         val delay = retryDelayMs
         retryDelayMs = when {
@@ -346,7 +290,6 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
             retryDelayMs < 20_000L -> 20_000L
             else -> RETRY_MAX_MS
         }
-
         Log.i(TAG, "Scheduling X2D camera retry in ${delay}ms")
         val r = Runnable {
             retryRunnable = null
@@ -366,8 +309,7 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         try {
             rtspView?.stop()
             rtspView?.setStatusListener(null)
-        } catch (_: Throwable) {
-        }
+        } catch (_: Throwable) {}
         streamStarted = false
         hasFirstFrame = false
     }
@@ -379,11 +321,10 @@ class X2dCameraPlugin(private val activity: Activity) : Plugin(activity) {
         videoZoom = ZOOM_MIN
         zoomFocusX = 0.5f
         zoomFocusY = 0.5f
+        scaleDetector = null
         if (removeView) {
             val box = container
-            if (box != null) {
-                (box.parent as? ViewGroup)?.removeView(box)
-            }
+            if (box != null) (box.parent as? ViewGroup)?.removeView(box)
             container = null
             rtspView = null
         }
