@@ -1,4 +1,4 @@
-name: BT VESC baseline validation
+name: BT VESC GEORGE OPT4 build
 
 on:
   push:
@@ -9,14 +9,15 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Check out GEORGE 0.4 source branch
+      - name: Check out exact GEORGE 0.4 source
         uses: actions/checkout@v4
         with:
           repository: bwoodill/BT_VESC
           ref: v2.3_GEORGE_0.4
           path: BT_VESC
+          fetch-depth: 1
 
-      - name: Download official GEORGE 0.4 release binary
+      - name: Download official GEORGE 0.4 binary
         shell: bash
         run: |
           set -euxo pipefail
@@ -24,9 +25,7 @@ jobs:
             https://github.com/bwoodill/BT_VESC/releases/download/v2.3/v2.3_george_0.4.zip
           mkdir -p /tmp/george
           unzip -q /tmp/v2.3_george_0.4.zip -d /tmp/george
-          sha256sum /tmp/george/BLDC_4_BT_VESC.bin
-          stat -c '%n %s bytes' /tmp/george/BLDC_4_BT_VESC.bin
-          strings /tmp/george/BLDC_4_BT_VESC.bin | grep -E 'BT_VESC VERSION|GEORGE'
+          echo '26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958  /tmp/george/BLDC_4_BT_VESC.bin' | sha256sum -c -
 
       - name: Install exact ARM GCC 7-2018-q2
         shell: bash
@@ -38,9 +37,8 @@ jobs:
           mkdir -p "$HOME/toolchains"
           tar -xjf /tmp/gcc-arm-none-eabi.tar.bz2 -C "$HOME/toolchains"
           echo "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin" >> "$GITHUB_PATH"
-          "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin/arm-none-eabi-gcc" --version
 
-      - name: Build untouched GEORGE 0.4 baseline
+      - name: Prove clean source reproduces official binary
         shell: bash
         run: |
           set -euxo pipefail
@@ -48,23 +46,604 @@ jobs:
           cd BT_VESC
           make clean || true
           make -j2
-          cp build/BLDC_4_BT_VESC.bin ../GEORGE04_SOURCE_BUILD.bin
-          cd ..
-          echo '=== source build ==='
-          sha256sum GEORGE04_SOURCE_BUILD.bin
-          stat -c '%n %s bytes' GEORGE04_SOURCE_BUILD.bin
-          strings GEORGE04_SOURCE_BUILD.bin | grep -E 'BT_VESC VERSION|GEORGE'
-          echo '=== compare to official release ==='
-          cmp -l GEORGE04_SOURCE_BUILD.bin /tmp/george/BLDC_4_BT_VESC.bin | head -20 || true
-          if cmp -s GEORGE04_SOURCE_BUILD.bin /tmp/george/BLDC_4_BT_VESC.bin; then
-            echo 'EXACT_MATCH=YES'
-          else
-            echo 'EXACT_MATCH=NO'
-          fi
+          test "$(sha256sum build/BLDC_4_BT_VESC.bin | cut -d' ' -f1)" = "26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958"
+          cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
+          echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Upload baseline build
+      - name: Apply OPT4 source modifications
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd BT_VESC
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected 1 match, got {n}\n--- needle ---\n{old}")
+              p.write_text(s.replace(old, new, 1))
+
+          # ------------------------------------------------------------------
+          # Identify this customized build.
+          # ------------------------------------------------------------------
+          replace_once(
+              "applications/app_version.h",
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT4"'
+          )
+
+          # ------------------------------------------------------------------
+          # Preserve the user's known-good BT_VESC settings as compiled defaults.
+          # This protects against the settings reset observed after firmware flash.
+          # ------------------------------------------------------------------
+          defaults = Path("applications/defaults.h")
+          s = defaults.read_text()
+          pairs = {
+              "#define TRIG_ON_TOUT_MS 400": "#define TRIG_ON_TOUT_MS 800",
+              "#define TRIG_OFF_TOUT_MS 500": "#define TRIG_OFF_TOUT_MS 900",
+              "#define SPEED_DEFAULT 3": "#define SPEED_DEFAULT 2",
+              "#define SPEEDS1 1525": "#define SPEEDS1 1975",
+              "#define SPEEDS2 2300": "#define SPEEDS2 2175",
+              "#define SPEEDS3 3100": "#define SPEEDS3 2350",
+              "#define SPEEDS4 3525": "#define SPEEDS4 2525",
+              "#define SPEEDS5 3900": "#define SPEEDS5 2950",
+              "#define SPEEDS6 4150": "#define SPEEDS6 3250",
+              "#define SPEEDS7 4450": "#define SPEEDS7 3975",
+              "#define SPEEDS8 4850": "#define SPEEDS8 4150",
+              "#define SPEEDS9 5000": "#define SPEEDS9 4700",
+              "#define LIMITS1 1": "#define LIMITS1 1.75",
+              "#define LIMITS2 2.2": "#define LIMITS2 2.00",
+              "#define LIMITS3 3.8": "#define LIMITS3 2.40",
+              "#define LIMITS4 6.2": "#define LIMITS4 3.00",
+              "#define LIMITS5 9.6": "#define LIMITS5 4.50",
+              "#define LIMITS6 12.8": "#define LIMITS6 6.00",
+              "#define LIMITS7 17": "#define LIMITS7 9.20",
+              "#define LIMITS8 22.8": "#define LIMITS8 12.50",
+              "#define LIMITS9 23": "#define LIMITS9 20.00",
+              "#define CRUISE 0": "#define CRUISE 1",
+              "#define LOW_MIGRATE 0": "#define LOW_MIGRATE 1",
+          }
+          for old, new in pairs.items():
+              if s.count(old) != 1:
+                  raise SystemExit(f"applications/defaults.h: expected exactly one {old!r}, got {s.count(old)}")
+              s = s.replace(old, new, 1)
+          defaults.write_text(s)
+
+          # ------------------------------------------------------------------
+          # New internal messages. Append them so all existing message numbers
+          # remain unchanged.
+          # ------------------------------------------------------------------
+          replace_once(
+              "applications/msgs.h",
+              """    BATT_1_TOOLOW,
+              BATT_2_TOOLOW,
+
+              MESSAGE_EOL,""",
+              """    BATT_1_TOOLOW,
+              BATT_2_TOOLOW,
+
+              // Internal trigger/speed coordination for fast release-to-stop.
+              SPEED_PAUSE,
+              SPEED_RESUME,
+
+              MESSAGE_EOL,"""
+          )
+          replace_once(
+              "applications/msgs.h",
+              """    "BATT_1_TOOLOW", "BATT_2_TOOLOW", \
+          }""",
+              """    "BATT_1_TOOLOW", "BATT_2_TOOLOW", \
+              "SPEED_PAUSE", "SPEED_RESUME", \
+          }"""
+          )
+
+          # ------------------------------------------------------------------
+          # Two consecutive 40 Hz samples are required before reporting an edge.
+          # ------------------------------------------------------------------
+          replace_once(
+              "applications/app_sikorski.c",
+              """    static uint8_t sw = 1;
+              bool trigger_pressed = false;""",
+              """    // Debounce the physical trigger: require two consecutive 40 Hz
+              // samples before reporting a state change (~25-50 ms).
+              static uint8_t raw_last = 1;
+              static uint8_t stable_state = 1;
+              static uint8_t stable_count = 0;
+              bool trigger_pressed = false;"""
+          )
+          replace_once(
+              "applications/app_sikorski.c",
+              """        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN);
+              if (trigger_pressed)
+              {
+                  if (sw == 0) // debounce
+                      send_to_trigger (SW_PRESSED);
+                  sw = 1;
+              }
+              else
+              {
+                  if (sw == 1) // debounce
+                      send_to_trigger (SW_RELEASED);
+                  sw = 0;
+              }""",
+              """        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN) ? true : false;
+
+              uint8_t raw_now = trigger_pressed ? 1 : 0;
+              if (raw_now == raw_last)
+              {
+                  if (stable_count < 2)
+                      stable_count++;
+              }
+              else
+              {
+                  raw_last = raw_now;
+                  stable_count = 1;
+              }
+
+              if (stable_count >= 2 && raw_last != stable_state)
+              {
+                  stable_state = raw_last;
+                  send_to_trigger (stable_state ? SW_PRESSED : SW_RELEASED);
+              }"""
+          )
+
+          # ------------------------------------------------------------------
+          # Trigger state machine:
+          #  - first press from OFF starts immediately
+          #  - every debounced release pauses motor output immediately
+          #  - a re-press resumes output while click recognition continues
+          #  - cruise retains its intentional hands-off behavior
+          # ------------------------------------------------------------------
+          replace_once(
+              "applications/trigger.c",
+              """        TRIG_LOG(("TRIGGER State = %s, Event = 0x%x", sw_states[state], event));
+              SW_STATE old_state = state;
+
+              switch (state)""",
+              """        TRIG_LOG(("TRIGGER State = %s, Event = 0x%x", sw_states[state], event));
+              SW_STATE old_state = state;
+
+              // Decouple motor output from the click-recognition timers.
+              // A release stops torque immediately after switch debounce, while the
+              // trigger state machine can still wait to see whether it was a click.
+              if (event == SW_RELEASED && state != SWST_CRUISE)
+                  send_to_speed (SPEED_PAUSE);
+              else if (event == SW_PRESSED)
+                  send_to_speed (SPEED_RESUME);
+
+              switch (state)"""
+          )
+          replace_once(
+              "applications/trigger.c",
+              """        case SWST_OFF:
+                  if (event == SW_PRESSED)
+                  {
+                      state = SWST_GOING_ON;
+                      timeout = MS2ST(settings->trig_on_time);
+                  }
+                  break;""",
+              """        case SWST_OFF:
+                  if (event == SW_PRESSED)
+                  {
+                      // Single-press start.
+                      state = SWST_ONE_ON;
+                      timeout = TIME_INFINITE;
+                      send_to_speed (SPEED_ON);
+                  }
+                  break;"""
+          )
+
+          # ------------------------------------------------------------------
+          # Speed state machine.
+          # ------------------------------------------------------------------
+          replace_once(
+              "applications/speed.c",
+              """    MOTOR_ON,			// motor running
+              MOTOR_START,		// test for obstruction
+              MOTOR_EOL""",
+              """    MOTOR_ON,			// motor running
+              MOTOR_START,		// test for obstruction
+              MOTOR_PAUSED,		// trigger released during click-recognition window
+              MOTOR_EOL"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """const char *const motor_states[] =
+              { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START"};""",
+              """const char *const motor_states[] =
+              { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START", "MOTOR_PAUSED"};"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """#define RAMPING_TIME_MS 50.0 // mS - 20 times per second
+          #define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running""",
+              """#define RAMPING_TIME_MS 50.0 // mS - 20 times per second
+          #define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running
+          #define RUNNING_MAX_ERPM 100000 // MAX ERPM when running is large and unrestrained.
+
+          // $r remains the startup ramp. Normal speed-level changes use 2x $r.
+          static float ramp_multiplier = 1.0;"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """    const float delta = ((float) settings->ramping) / (1000.0 / RAMPING_TIME_MS);""",
+              """    const float delta = (((float) settings->ramping) * ramp_multiplier) / (1000.0 / RAMPING_TIME_MS);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """typedef enum _run_modes
+          {
+              MODE_OFF, MODE_RUN, MODE_START
+          } RUN_MODES;""",
+              """typedef enum _run_modes
+          {
+              MODE_OFF, MODE_RUN, MODE_START, MODE_PAUSE, MODE_RESUME
+          } RUN_MODES;"""
+          )
+
+          old = """    if (mode == MODE_OFF)
+              {
+                  present_speed = 0.0;
+                  mc_interface_release_motor ();
+                  set_max_current(settings->limits[0]);
+                  return present_speed;
+              }
+              else if (mode == MODE_START)
+              {
+                  set_max_current(settings->guard_limit);
+                  present_speed = settings->guard_erpm;
+                  present_speed = limit_speed_by_battery(present_speed);
+                  set_max_ERPM(settings->guard_max_erpm);
+          		
+          		if ((conf->m_invert_direction) == 1) //reverse have speed
+          		{
+          			mc_interface_set_pid_speed ((present_speed / 2));
+          		}
+          		else
+          			mc_interface_set_pid_speed (present_speed);
+                  return present_speed;
+              }
+              else // mode == MODE_RUN
+              {
+                  #define RUNNING_MAX_ERPM  100000 // MAX ERPM when running is just large and unrestrained.
+                  set_max_ERPM(RUNNING_MAX_ERPM);
+                  set_max_current(settings->limits[user_setting]);
+
+                  // ramp from the present speed toward the desired speed from user setting
+                  present_speed = ramping (present_speed, get_limited_speed(user_setting));
+
+                  if ((conf->m_invert_direction) == 1) //reverse half speed
+          		{
+          			mc_interface_set_pid_speed ((present_speed / 2));
+          		}
+          		else
+          			mc_interface_set_pid_speed (present_speed);
+              }
+
+              #if(SPEED_LOG == 1)
+                  const char *const mode_str[] = { "OFF", "RUN", "START" };
+              #endif"""
+          new = """    if (mode == MODE_OFF)
+              {
+                  present_speed = 0.0;
+                  mc_interface_release_motor ();
+                  set_max_current(settings->limits[0]);
+                  return present_speed;
+              }
+              else if (mode == MODE_PAUSE)
+              {
+                  // Release torque but retain the commanded/ramped speed in memory.
+                  mc_interface_release_motor ();
+                  return present_speed;
+              }
+              else if (mode == MODE_RESUME)
+              {
+                  // Resume at the retained commanded speed. If a ramp was incomplete,
+                  // the normal 50 ms ramp timer will continue it after resumption.
+                  set_max_ERPM(RUNNING_MAX_ERPM);
+                  set_max_current(settings->limits[user_setting]);
+                  if ((conf->m_invert_direction) == 1)
+                      mc_interface_set_pid_speed (present_speed / 2);
+                  else
+                      mc_interface_set_pid_speed (present_speed);
+                  return present_speed;
+              }
+              else if (mode == MODE_START)
+              {
+                  set_max_current(settings->guard_limit);
+                  present_speed = settings->guard_erpm;
+                  present_speed = limit_speed_by_battery(present_speed);
+                  set_max_ERPM(settings->guard_max_erpm);
+          		
+          		if ((conf->m_invert_direction) == 1) //reverse have speed
+          		{
+          			mc_interface_set_pid_speed ((present_speed / 2));
+          		}
+          		else
+          			mc_interface_set_pid_speed (present_speed);
+                  return present_speed;
+              }
+              else // mode == MODE_RUN
+              {
+                  set_max_ERPM(RUNNING_MAX_ERPM);
+                  set_max_current(settings->limits[user_setting]);
+
+                  // ramp from the present speed toward the desired speed from user setting
+                  present_speed = ramping (present_speed, get_limited_speed(user_setting));
+
+                  if ((conf->m_invert_direction) == 1) //reverse half speed
+          		{
+          			mc_interface_set_pid_speed ((present_speed / 2));
+          		}
+          		else
+          			mc_interface_set_pid_speed (present_speed);
+              }
+
+              #if(SPEED_LOG == 1)
+                  const char *const mode_str[] = { "OFF", "RUN", "START", "PAUSE", "RESUM" };
+              #endif"""
+          replace_once("applications/speed.c", old, new)
+
+          replace_once(
+              "applications/speed.c",
+              """    uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed
+
+              for (;;)""",
+              """    uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed
+              bool paused_from_start = false;
+
+              for (;;)"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """            case SPEED_ON:
+                      send_to_display (DISP_ON_TRIGGER);""",
+              """            case SPEED_ON:
+                      ramp_multiplier = 1.0;
+                      paused_from_start = false;
+                      send_to_display (DISP_ON_TRIGGER);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """			case JUMP_SPEED_START: //new jump speed
+          				state = MOTOR_ON;""",
+              """			case JUMP_SPEED_START: //new jump speed
+                          ramp_multiplier = 1.0;
+          				state = MOTOR_ON;"""
+          )
+
+          replace_once(
+              "applications/speed.c",
+              """        case MOTOR_ON:
+                  switch (event)
+                  {
+                  case SPEED_OFF:""",
+              """        case MOTOR_ON:
+                  switch (event)
+                  {
+                  case SPEED_PAUSE:
+                      state = MOTOR_PAUSED;
+                      paused_from_start = false;
+                      set_timeout(TIME_INFINITE);
+                      adjust_speed (user_speed, MODE_PAUSE);
+                      break;
+                  case SPEED_OFF:"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """            case SPEED_UP:
+                      increase (&user_speed);
+                      adjust_speed (user_speed, MODE_RUN);""",
+              """            case SPEED_UP:
+                      increase (&user_speed);
+                      ramp_multiplier = 2.0;
+                      adjust_speed (user_speed, MODE_RUN);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """            case SPEED_DOWN:
+                      decrease (&user_speed);
+                      adjust_speed (user_speed, MODE_RUN);""",
+              """            case SPEED_DOWN:
+                      decrease (&user_speed);
+                      ramp_multiplier = 2.0;
+                      adjust_speed (user_speed, MODE_RUN);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """            case JUMP_SPEED: //new jump speed
+                      user_speed = settings->jump_speed -1;
+                      adjust_speed (user_speed, MODE_RUN);""",
+              """            case JUMP_SPEED: //new jump speed
+                      user_speed = settings->jump_speed -1;
+                      ramp_multiplier = 2.0;
+                      adjust_speed (user_speed, MODE_RUN);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """            case SPEED_READY:   // READY thread approved start conditions
+                      state = MOTOR_ON;
+                      adjust_speed (user_speed, MODE_RUN);""",
+              """            case SPEED_READY:   // READY thread approved start conditions
+                      state = MOTOR_ON;
+                      paused_from_start = false;
+                      ramp_multiplier = 1.0;
+                      adjust_speed (user_speed, MODE_RUN);"""
+          )
+          replace_once(
+              "applications/speed.c",
+              """        case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions
+                  switch (event)
+                  {
+                  case SPEED_OFF:		// user gave up and turned motor off.""",
+              """        case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions
+                  switch (event)
+                  {
+                  case SPEED_PAUSE:
+                      // Preserve safe-start semantics if this mode is ever re-enabled.
+                      state = MOTOR_PAUSED;
+                      paused_from_start = true;
+                      set_timeout(TIME_INFINITE);
+                      adjust_speed (user_speed, MODE_PAUSE);
+                      send_to_ready (READY_OFF);
+                      break;
+                  case SPEED_OFF:		// user gave up and turned motor off."""
+          )
+
+          replace_once(
+              "applications/speed.c",
+              """            default:
+                      break;
+                  }
+                  break;
+              default:
+                  break;
+              }
+
+              if (old_state != state)""",
+              """            default:
+                      break;
+                  }
+                  break;
+
+              case MOTOR_PAUSED:
+                  switch (event)
+                  {
+                  case SPEED_RESUME:
+                      if (paused_from_start && settings->use_safety)
+                      {
+                          state = MOTOR_START;
+                          set_timeout(TIME_INFINITE);
+                          send_to_ready (READY_ON);
+                      }
+                      else
+                      {
+                          state = MOTOR_ON;
+                          present_speed = adjust_speed (user_speed, MODE_RESUME);
+                          send_to_display (DISP_ON_TRIGGER);
+                          send_to_display (DISP_SPEED_1 + user_speed);
+
+                          // Continue an interrupted ramp immediately. Otherwise,
+                          // return to the normal periodic battery-check cadence.
+                          if (present_speed == get_limited_speed(user_speed))
+                              set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));
+                          else
+                              set_timeout(MS2ST(RAMPING_TIME_MS));
+                      }
+                      break;
+
+                  case SPEED_OFF:
+                      state = MOTOR_OFF;
+                      paused_from_start = false;
+                      send_to_display (DISP_OFF_TRIGGER);
+                      set_timeout(MS2ST(settings->migrate_rate));
+                      adjust_speed (user_speed, MODE_OFF);
+                      break;
+
+                  case SPEED_PAUSE:
+                      // Already paused.
+                      break;
+
+                  default:
+                      break;
+                  }
+                  break;
+
+              default:
+                  break;
+              }
+
+              if (old_state != state)"""
+          )
+
+          # Ensure normal start explicitly selects startup ramp before first step.
+          replace_once(
+              "applications/speed.c",
+              """                    // start ramping up to the first speed.
+                      adjust_speed (user_speed, MODE_RUN);""",
+              """                    // start ramping up to the first speed using $r.
+                      ramp_multiplier = 1.0;
+                      adjust_speed (user_speed, MODE_RUN);"""
+          )
+
+          print("OPT4 source modifications applied successfully.")
+          PY
+
+          git diff --check
+          git diff > ../BT_VESC_GEORGE04_OPT4_SOURCE.diff
+
+      - name: Static source assertions
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd BT_VESC
+          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT4' applications/app_version.h
+          grep -F 'SPEED_PAUSE' applications/msgs.h
+          grep -F 'SPEED_RESUME' applications/msgs.h
+          grep -F 'ramp_multiplier = 2.0' applications/speed.c
+          grep -F 'stable_count >= 2' applications/app_sikorski.c
+          grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
+          grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
+          grep -F '#define SPEEDS9 4700' applications/defaults.h
+          grep -F '#define LIMITS9 20.00' applications/defaults.h
+          grep -F '#define CRUISE 1' applications/defaults.h
+          grep -F '#define LOW_MIGRATE 1' applications/defaults.h
+
+      - name: Compile OPT4 HW60 firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin:$PATH"
+          cd BT_VESC
+          make clean
+          make -j2
+          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
+          cd ..
+          echo '=== FINAL OPT4 ==='
+          sha256sum BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
+          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
+          strings BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT4'
+
+      - name: Create build notes
+        shell: bash
+        run: |
+          cat > BT_VESC_GEORGE04_OPT4_BUILD_NOTES.txt <<'EOF'
+          BT_VESC 2.3 GEORGE 0.4 OPT4 - HW60
+          
+          Base source: bwoodill/BT_VESC branch v2.3_GEORGE_0.4
+          Base official binary SHA-256:
+          26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958
+          
+          Toolchain:
+          gcc-arm-none-eabi-7-2018-q2-update (GCC 7.3.1)
+          Toolchain archive SHA-256:
+          bb17109f0ee697254a5d4ae6e5e01440e3ea8f0277f2e8169bf95d07c7d5fe69
+          
+          Baseline validation:
+          Clean source compiled with the exact toolchain reproduced the official
+          393,208-byte GEORGE 0.4 release binary byte-for-byte before modifications.
+          
+          OPT4 changes:
+          1. Single-press start retained.
+          2. Trigger release pauses motor torque after 2-sample debounce while click
+             recognition continues. True stop occurs only after the gesture window.
+          3. Two consecutive trigger samples required at the 40 Hz scan rate.
+          4. $r remains startup ramp. Speed level changes use 2x $r.
+          5. Brief click pauses do not start speed migration. True stop does.
+          6. Compiled BT_VESC defaults match the user's known-good tuned settings.
+          
+          Bench test with prop removed/secured before water use.
+          EOF
+
+      - name: Upload final firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-george04-baseline
-          path: GEORGE04_SOURCE_BUILD.bin
+          name: bt-vesc-george04-opt4
+          path: |
+            BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
+            BT_VESC_GEORGE04_OPT4_SOURCE.diff
+            BT_VESC_GEORGE04_OPT4_BUILD_NOTES.txt
           if-no-files-found: error
