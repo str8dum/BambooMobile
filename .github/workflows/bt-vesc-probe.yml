@@ -1,4 +1,4 @@
-name: BT VESC GEORGE OPT6 build
+name: BT VESC GEORGE SINGLE PRESS PRESET build
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
           cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
           echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Apply OPT6 source modifications
+      - name: Apply single-press start and preset defaults
         shell: bash
         run: |
           set -euxo pipefail
@@ -58,42 +58,45 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def read_lines(path):
-              return Path(path).read_text().splitlines(keepends=True)
+          def replace_once(path, old, new):
+              p=Path(path)
+              s=p.read_text()
+              n=s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected 1 match for {old!r}, got {n}")
+              p.write_text(s.replace(old,new,1))
 
-          def write_lines(path, lines):
-              Path(path).write_text(''.join(lines))
-
-          def find_line(lines, stripped, start=0):
-              hits = [i for i in range(start, len(lines)) if lines[i].strip() == stripped]
-              if len(hits) != 1:
-                  raise SystemExit(f"{stripped!r}: expected one line after {start}, got {hits}")
-              return hits[0]
-
-          def find_first(lines, stripped, start=0):
-              for i in range(start, len(lines)):
-                  if lines[i].strip() == stripped:
-                      return i
-              raise SystemExit(f"{stripped!r}: line not found after {start}")
-
-          def replace_text_once(path, old, new):
-              p = Path(path)
-              s = p.read_text()
-              if s.count(old) != 1:
-                  raise SystemExit(f"{path}: expected one {old!r}, got {s.count(old)}")
-              p.write_text(s.replace(old, new, 1))
-
-          # Identify build.
-          replace_text_once(
+          # Version identifier.
+          replace_once(
               "applications/app_version.h",
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
-              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT6"'
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET"'
           )
 
-          # User's known-good BT_VESC settings as compiled defaults.
-          defaults = Path("applications/defaults.h")
-          s = defaults.read_text()
-          pairs = [
+          # Only behavior change: first trigger press starts immediately.
+          replace_once(
+              "applications/trigger.c",
+              """        case SWST_OFF:
+            if (event == SW_PRESSED)
+            {
+                state = SWST_GOING_ON;
+                timeout = MS2ST(settings->trig_on_time);
+            }
+            break;""",
+              """        case SWST_OFF:
+            if (event == SW_PRESSED)
+            {
+                state = SWST_ONE_ON;
+                timeout = TIME_INFINITE;
+                send_to_speed (SPEED_ON);
+            }
+            break;"""
+          )
+
+          # Compile the user's current BT_VESC tuning into reset defaults.
+          p=Path("applications/defaults.h")
+          s=p.read_text()
+          pairs=[
               ("#define TRIG_ON_TOUT_MS 400", "#define TRIG_ON_TOUT_MS 800"),
               ("#define TRIG_OFF_TOUT_MS 500", "#define TRIG_OFF_TOUT_MS 900"),
               ("#define SPEED_DEFAULT 3", "#define SPEED_DEFAULT 2"),
@@ -118,148 +121,68 @@ jobs:
               ("#define CRUISE 0", "#define CRUISE 1"),
               ("#define LOW_MIGRATE 0", "#define LOW_MIGRATE 1"),
           ]
-          for old, new in pairs:
-              if s.count(old) != 1:
-                  raise SystemExit(f"applications/defaults.h: expected one {old!r}, got {s.count(old)}")
-              s = s.replace(old, new, 1)
-          defaults.write_text(s)
+          for old,new in pairs:
+              if s.count(old)!=1:
+                  raise SystemExit(f"defaults.h: expected 1 match for {old!r}, got {s.count(old)}")
+              s=s.replace(old,new,1)
+          p.write_text(s)
 
-          # Two-sample physical trigger debounce at the existing 40 Hz scan.
-          p = "applications/app_sikorski.c"
-          L = read_lines(p)
-          i = find_line(L, "static uint8_t sw = 1;")
-          if L[i+1].strip() != "bool trigger_pressed = false;":
-              raise SystemExit("unexpected trigger declaration layout")
-          L[i:i+2] = [
-              "    // Two-sample debounce at the existing 40 Hz scan rate (~25-50 ms).\n",
-              "    static uint8_t raw_last = 1;\n",
-              "    static uint8_t stable_state = 1;\n",
-              "    static uint8_t stable_count = 0;\n",
-              "    bool trigger_pressed = false;\n",
-          ]
-          start = find_line(L, "trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN);")
-          end = find_first(L, "int i = 0;", start + 1)
-          L[start:end] = [
-              "        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN) ? true : false;\n",
-              "\n",
-              "        uint8_t raw_now = trigger_pressed ? 1 : 0;\n",
-              "        if (raw_now == raw_last)\n",
-              "        {\n",
-              "            if (stable_count < 2)\n",
-              "                stable_count++;\n",
-              "        }\n",
-              "        else\n",
-              "        {\n",
-              "            raw_last = raw_now;\n",
-              "            stable_count = 1;\n",
-              "        }\n",
-              "\n",
-              "        if (stable_count >= 2 && raw_last != stable_state)\n",
-              "        {\n",
-              "            stable_state = raw_last;\n",
-              "            send_to_trigger (stable_state ? SW_PRESSED : SW_RELEASED);\n",
-              "        }\n",
-              "\n",
-          ]
-          write_lines(p, L)
-
-          # Single-press start only. IMPORTANT: do not alter the original GEORGE
-          # running click/shift state machine. While the user is doing a shift
-          # gesture, motor output remains running exactly as in stock GEORGE.
-          p = "applications/trigger.c"
-          L = read_lines(p)
-          off = find_line(L, "case SWST_OFF:")
-          on = find_first(L, "case SWST_ON:", off + 1)
-          L[off:on] = [
-              "        case SWST_OFF:\n",
-              "            if (event == SW_PRESSED)\n",
-              "            {\n",
-              "                // Single-press start.\n",
-              "                state = SWST_ONE_ON;\n",
-              "                timeout = TIME_INFINITE;\n",
-              "                send_to_speed (SPEED_ON);\n",
-              "            }\n",
-              "            break;\n",
-          ]
-          write_lines(p, L)
-
-          # Separate startup ramp from speed-change ramp without changing
-          # trigger semantics. Startup remains $r; speed changes use 2x $r.
-          p = "applications/speed.c"
-          L = read_lines(p)
-          i = find_line(L, "#define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running")
-          L[i+1:i+1] = [
-              "\n",
-              "// $r is the startup ramp; speed-level changes use 2x $r.\n",
-              "static float ramp_multiplier = 1.0;\n",
-          ]
-          for j,x in enumerate(L):
-              if "const float delta = ((float) settings->ramping)" in x:
-                  L[j] = "    const float delta = (((float) settings->ramping) * ramp_multiplier) / (1000.0 / RAMPING_TIME_MS);\n"
-                  break
-          else:
-              raise SystemExit("ramping delta not found")
-
-          motor_off = find_line(L, "case MOTOR_OFF:")
-          motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
-          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
-
-          # Startup/JUMP startup use normal $r.
-          i = find_first(L, "case SPEED_ON:", motor_off + 1)
-          L[i+1:i+1] = ["                ramp_multiplier = 1.0;\n"]
-          i = find_first(L, "case JUMP_SPEED_START: //new jump speed", motor_off + 1)
-          if i < motor_on:
-              L[i+1:i+1] = ["                ramp_multiplier = 1.0;\n"]
-
-          motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
-          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
-
-          # Speed-level changes use 2x $r.
-          for case_name, anchor in [
-              ("case SPEED_UP:", "increase (&user_speed);"),
-              ("case SPEED_DOWN:", "decrease (&user_speed);"),
-              ("case JUMP_SPEED: //new jump speed", "user_speed = settings->jump_speed -1;"),
-          ]:
-              ci = find_first(L, case_name, motor_on + 1)
-              if ci >= motor_start:
-                  raise SystemExit(f"{case_name} escaped MOTOR_ON")
-              ai = find_first(L, anchor, ci + 1)
-              L[ai+1:ai+1] = ["                ramp_multiplier = 2.0;\n"]
-
-          # If safe-start is ever enabled, completion returns to startup ramp.
-          i = find_first(L, "case SPEED_READY:   // READY thread approved start conditions", motor_start + 1)
-          state_line = find_first(L, "state = MOTOR_ON;", i + 1)
-          L[state_line+1:state_line+1] = ["                ramp_multiplier = 1.0;\n"]
-
-          write_lines(p, L)
-          print("OPT6 source modifications applied successfully.")
+          print("Applied single-press start + tuned defaults.")
           PY
 
           git diff --check
-          git diff > ../BT_VESC_GEORGE04_OPT6_SOURCE.diff
+          git diff > ../BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_SOURCE.diff
 
-      - name: Static source assertions
+      - name: Verify only intended source areas changed
         shell: bash
         run: |
           set -euxo pipefail
           cd BT_VESC
-          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT6' applications/app_version.h
-          grep -F 'stable_count >= 2' applications/app_sikorski.c
+          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET' applications/app_version.h
+          grep -F 'state = SWST_ONE_ON;' applications/trigger.c
           grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
-          grep -F 'case SWST_GOING_OFF:' applications/trigger.c
-          grep -F 'send_to_speed (SPEED_DOWN);' applications/trigger.c
-          grep -F 'send_to_speed (SPEED_UP);' applications/trigger.c
-          ! grep -F 'SPEED_PAUSE' applications/trigger.c
-          ! grep -F 'SPEED_RESUME' applications/trigger.c
-          ! grep -F 'MOTOR_PAUSED' applications/speed.c
-          grep -F 'ramp_multiplier = 2.0' applications/speed.c
-          grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
-          grep -F '#define SPEEDS9 4700' applications/defaults.h
-          grep -F '#define LIMITS9 20.00' applications/defaults.h
-          grep -F '#define CRUISE 1' applications/defaults.h
-          grep -F '#define LOW_MIGRATE 1' applications/defaults.h
 
-      - name: Compile OPT6 HW60 firmware
+          grep -F '#define USE_SAFETY_SPEED 0' applications/defaults.h
+          grep -F '#define TRIG_ON_TOUT_MS 800' applications/defaults.h
+          grep -F '#define TRIG_OFF_TOUT_MS 900' applications/defaults.h
+          grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
+          grep -F '#define SPEED_RAMPING_RATE 1500' applications/defaults.h
+          grep -F '#define MIGRATE_SPEED_MILLISECONDS 5000' applications/defaults.h
+          grep -F '#define DISP_OFF_TRIG_DURATION_MS 6000' applications/defaults.h
+          grep -F '#define CRUISE 1' applications/defaults.h
+          grep -F '#define JUMP 0' applications/defaults.h
+          grep -F '#define JUMP_SPEED 6' applications/defaults.h
+          grep -F '#define LOW_MIGRATE 1' applications/defaults.h
+          grep -F '#define REVERSE 0' applications/defaults.h
+
+          grep -F '#define SPEEDS1 1975' applications/defaults.h
+          grep -F '#define SPEEDS2 2175' applications/defaults.h
+          grep -F '#define SPEEDS3 2350' applications/defaults.h
+          grep -F '#define SPEEDS4 2525' applications/defaults.h
+          grep -F '#define SPEEDS5 2950' applications/defaults.h
+          grep -F '#define SPEEDS6 3250' applications/defaults.h
+          grep -F '#define SPEEDS7 3975' applications/defaults.h
+          grep -F '#define SPEEDS8 4150' applications/defaults.h
+          grep -F '#define SPEEDS9 4700' applications/defaults.h
+
+          grep -F '#define LIMITS1 1.75' applications/defaults.h
+          grep -F '#define LIMITS2 2.00' applications/defaults.h
+          grep -F '#define LIMITS3 2.40' applications/defaults.h
+          grep -F '#define LIMITS4 3.00' applications/defaults.h
+          grep -F '#define LIMITS5 4.50' applications/defaults.h
+          grep -F '#define LIMITS6 6.00' applications/defaults.h
+          grep -F '#define LIMITS7 9.20' applications/defaults.h
+          grep -F '#define LIMITS8 12.50' applications/defaults.h
+          grep -F '#define LIMITS9 20.00' applications/defaults.h
+
+          # Explicitly confirm original running shift logic was not modified.
+          git diff -- applications/trigger.c | grep -F 'case SWST_OFF:'
+          ! git diff -- applications/trigger.c | grep -F 'SWST_GOING_OFF'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_UP'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_DOWN'
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "applications/app_version.h applications/defaults.h applications/trigger.c "
+
+      - name: Compile HW60 firmware
         shell: bash
         run: |
           set -euxo pipefail
@@ -267,48 +190,51 @@ jobs:
           cd BT_VESC
           make clean
           make -j2
-          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
+          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
           cd ..
-          echo '=== FINAL OPT6 ==='
-          sha256sum BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
-          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
-          strings BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT6'
+          sha256sum BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
+          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
+          strings BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET'
 
       - name: Create build notes
         shell: bash
         run: |
-          cat > BT_VESC_GEORGE04_OPT6_BUILD_NOTES.txt <<'EOF'
-          BT_VESC 2.3 GEORGE 0.4 OPT6 - HW60
+          cat > BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_BUILD_NOTES.txt <<'EOF'
+          BT_VESC 2.3 GEORGE 0.4 - SINGLE PRESS + USER PRESET DEFAULTS - HW60
 
-          Base source: bwoodill/BT_VESC branch v2.3_GEORGE_0.4
-          Base official binary SHA-256:
+          Base:
+          bwoodill/BT_VESC branch v2.3_GEORGE_0.4
+          Official base binary SHA-256:
           26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958
 
-          Baseline validation:
-          Clean source compiled with the exact GCC 7.3.1 toolchain reproduced the
+          Validation:
+          The untouched source was compiled with GCC 7.3.1 and reproduced the
           official GEORGE 0.4 binary byte-for-byte before modifications.
 
-          OPT6 behavior:
-          - Single press starts the motor.
-          - Original GEORGE running click/shift state machine is preserved.
-          - Motor remains running during the release/re-press sequence used to shift.
-          - Motor stops only when the original trigger timeout decides the release was
-            a true stop (with current $T 800 timing).
-          - Two-sample trigger debounce at 40 Hz.
-          - Startup ramp uses $r (1500 current setting).
-          - Speed-level changes use 2x $r (3000 with current setting).
-          - Migration begins only after a true SPEED_OFF, as in original GEORGE.
-          - User's tuned settings are compiled as defaults.
+          Behavior change:
+          Only SWST_OFF startup behavior is changed: first trigger press sends
+          SPEED_ON and enters SWST_ONE_ON. The original GEORGE running click/shift
+          state machine is otherwise unchanged.
 
-          Bench test with prop removed/secured before water use.
+          Compiled reset defaults:
+          d=2 M=9 U=0 T=800 t=900 r=1500 m=5000
+          G=6.00 g=0.50 h=0.30 j=900 k=1500 c=50 F=5 a=0.2000
+          b=6 R=0 p=10000 f=3000 D=6000 n=3500
+          i=2.00 x=14.00 l=00 C=1 J=0 K=6 e=1 E=0
+          S1..S9 = 1975,2175,2350,2525,2950,3250,3975,4150,4700
+          L1..L9 = 1.75,2.00,2.40,3.00,4.50,6.00,9.20,12.50,20.00
+          B1..B3 = 34.00,36.00,38.00
+
+          These are defaults used if BT_VESC initializes/resets its settings block.
+          Existing persistent settings may survive a flash; verify with $$ after flash.
           EOF
 
-      - name: Upload final firmware artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-george04-opt6
+          name: bt-vesc-single-press-preset
           path: |
-            BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
-            BT_VESC_GEORGE04_OPT6_SOURCE.diff
-            BT_VESC_GEORGE04_OPT6_BUILD_NOTES.txt
+            BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
+            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_SOURCE.diff
+            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_BUILD_NOTES.txt
           if-no-files-found: error
