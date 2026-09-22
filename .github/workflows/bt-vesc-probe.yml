@@ -1,4 +1,4 @@
-name: BT VESC GEORGE SINGLE PRESS PRESET build
+name: BT VESC GEORGE SINGLE PRESS PRESET IMBAL build
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
           cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
           echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Apply single-press start and preset defaults
+      - name: Apply single press preset and live imbalance warning
         shell: bash
         run: |
           set -euxo pipefail
@@ -66,14 +66,14 @@ jobs:
                   raise SystemExit(f"{path}: expected 1 match for {old!r}, got {n}")
               p.write_text(s.replace(old,new,1))
 
-          # Version identifier.
+          # Build identifier.
           replace_once(
               "applications/app_version.h",
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
-              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET"'
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET IMBAL"'
           )
 
-          # Only behavior change: first trigger press starts immediately.
+          # Single-press start. No other trigger/click/shift logic is changed.
           tp=Path("applications/trigger.c")
           L=tp.read_text().splitlines(keepends=True)
           off=[i for i,x in enumerate(L) if x.strip()=="case SWST_OFF:"]
@@ -95,7 +95,7 @@ jobs:
           ]
           tp.write_text(''.join(L))
 
-          # Compile the user's current BT_VESC tuning into reset defaults.
+          # Compile the user's current settings into reset defaults.
           p=Path("applications/defaults.h")
           s=p.read_text()
           pairs=[
@@ -129,33 +129,233 @@ jobs:
               s=s.replace(old,new,1)
           p.write_text(s)
 
-          print("Applied single-press start + tuned defaults.")
+          # Emit an existing battery-low display event immediately after each
+          # 5-second filtered battery update if the two batteries differ by
+          # more than $i. This does not send anything to the motor/speed thread.
+          p=Path("applications/app_sikorski.c")
+          s=p.read_text()
+          anchor="""    chMtxUnlock(&batt_mutex);
+}
+
+static THD_FUNCTION(switch_thread, arg)"""
+          repl="""    chMtxUnlock(&batt_mutex);
+
+    // Live imbalance indication. The battery values above are the same
+    // 5-second filtered values used by the rest of GEORGE battery logic.
+    // Positive imbalance means battery 1 is lower; negative means battery 2.
+    // $x=0 disables individual-battery sensing, so do not warn in that mode.
+    if (settings->b2Rratio != 0.0)
+    {
+        float imbalance = get_battery_imbalance();
+        if (imbalance > settings->batt_imbalance)
+            send_to_display (BATT_1_TOOLOW);
+        else if (imbalance < (-settings->batt_imbalance))
+            send_to_display (BATT_2_TOOLOW);
+    }
+}
+
+static THD_FUNCTION(switch_thread, arg)"""
+          if s.count(anchor)!=1:
+              raise SystemExit(f"app_sikorski warning anchor count={s.count(anchor)}")
+          p.write_text(s.replace(anchor,repl,1))
+
+          # Display a live imbalance warning for 3 seconds while running, then
+          # return to the normal speed display. Persistent imbalance re-warns
+          # on each 5-second battery update. Speed-change display events take
+          # priority and immediately restore the selected speed indication.
+          p=Path("applications/display.c")
+          s=p.read_text()
+
+          s=s.replace(
+              "#define HOLD_DISPLAY_TIME_mS MS2ST(1500)\n",
+              "#define HOLD_DISPLAY_TIME_mS MS2ST(1500)\n#define IMBALANCE_WARN_TIME_mS MS2ST(3000)\n",
+              1
+          )
+
+          s=s.replace(
+              """    DISP_SPEED,     // displaying the speed number
+    DISP_PWR_ON     // Power on display
+} DISP_STATE;
+
+const char *const disp_states[] =
+    { "DISP_OFF", "DISP_BATT", "DISP_TRIG", "DISP_WAIT", "DISP_SPEED", "DISP_PWR_ON" };""",
+              """    DISP_SPEED,     // displaying the speed number
+    DISP_WARN,      // live battery-imbalance warning while motor is running
+    DISP_PWR_ON     // Power on display
+} DISP_STATE;
+
+const char *const disp_states[] =
+    { "DISP_OFF", "DISP_BATT", "DISP_TRIG", "DISP_WAIT", "DISP_SPEED", "DISP_WARN", "DISP_PWR_ON" };""",
+              1
+          )
+
+          trig_anchor="""        case DISP_TRIG:
+            if (event >= DISP_SPEED_1 && event <= DISP_SPEED_9) // don't handle above speed 9, rewrite as needed to support...
+                last_speed = event;
+
+            switch (event)"""
+          trig_repl="""        case DISP_TRIG:
+            if (event >= DISP_SPEED_1 && event <= DISP_SPEED_9) // don't handle above speed 9, rewrite as needed to support...
+                last_speed = event;
+
+            if (event == BATT_1_TOOLOW || event == BATT_2_TOOLOW)
+            {
+                display_battery_graph(false);
+                timeout = IMBALANCE_WARN_TIME_mS;
+                state = DISP_WARN;
+                break;
+            }
+
+            switch (event)"""
+          if s.count(trig_anchor)!=1:
+              raise SystemExit(f"display DISP_TRIG anchor count={s.count(trig_anchor)}")
+          s=s.replace(trig_anchor,trig_repl,1)
+
+          speed_anchor="""        case DISP_SPEED:				// enter this state when "on trigger" - motor is running
+            if (event >= DISP_SPEED_1 && event <= DISP_SPEED_9) // don't handle above speed 9, rewrite as needed to support...
+            {
+                last_speed = event;
+                display_speed (last_speed);
+                timeout = MS2ST(settings->disp_on_ms);
+                break;
+            }
+            switch (event)"""
+          speed_repl="""        case DISP_SPEED:				// enter this state when "on trigger" - motor is running
+            if (event >= DISP_SPEED_1 && event <= DISP_SPEED_9) // don't handle above speed 9, rewrite as needed to support...
+            {
+                last_speed = event;
+                display_speed (last_speed);
+                timeout = MS2ST(settings->disp_on_ms);
+                break;
+            }
+            if (event == BATT_1_TOOLOW || event == BATT_2_TOOLOW)
+            {
+                display_battery_graph(false);
+                timeout = IMBALANCE_WARN_TIME_mS;
+                state = DISP_WARN;
+                break;
+            }
+            switch (event)"""
+          if s.count(speed_anchor)!=1:
+              raise SystemExit(f"display DISP_SPEED anchor count={s.count(speed_anchor)}")
+          s=s.replace(speed_anchor,speed_repl,1)
+
+          batt_anchor="""        case DISP_BATT:
+            switch (event)
+            {
+            case DISP_ON_TRIGGER:"""
+          warn_block="""        case DISP_WARN:
+            if (event >= DISP_SPEED_1 && event <= DISP_SPEED_9)
+            {
+                // A user speed change takes priority over the warning.
+                last_speed = event;
+                display_speed (last_speed);
+                timeout = MS2ST(settings->disp_on_ms);
+                state = DISP_SPEED;
+                break;
+            }
+            switch (event)
+            {
+            case BATT_1_TOOLOW:
+            case BATT_2_TOOLOW:
+                // Persistent imbalance: refresh the battery graph + 1/2 marker.
+                display_battery_graph(false);
+                timeout = IMBALANCE_WARN_TIME_mS;
+                break;
+            case DISP_OFF_TRIGGER:
+                display_idle();
+                timeout = MS2ST(settings->disp_beg_ms / 24);
+                state = DISP_WAIT;
+                dot_pos = 0;
+                break;
+            case TIMER_EXPIRY:
+                // Return to normal running display behavior.
+                if (last_speed >= DISP_SPEED_1 && last_speed <= DISP_SPEED_9)
+                {
+                    display_speed(last_speed);
+                    timeout = MS2ST(settings->disp_on_ms);
+                    state = DISP_SPEED;
+                }
+                else
+                {
+                    display_idle();
+                    timeout = TIME_INFINITE;
+                    state = DISP_SPEED;
+                }
+                break;
+            default:
+                break;
+            }
+            break;
+
+        case DISP_BATT:
+            switch (event)
+            {
+            case DISP_ON_TRIGGER:"""
+          if s.count(batt_anchor)!=1:
+              raise SystemExit(f"display DISP_BATT anchor count={s.count(batt_anchor)}")
+          s=s.replace(batt_anchor,warn_block,1)
+          p.write_text(s)
+
+          print("Applied single-press preset + live imbalance warning.")
           PY
 
           git diff --check
-          git diff > ../BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_SOURCE.diff
+          git diff > ../BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_SOURCE.diff
 
-      - name: Verify only intended source areas changed
+      - name: Static source assertions
         shell: bash
         run: |
           set -euxo pipefail
           cd BT_VESC
-          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET' applications/app_version.h
-          grep -F 'state = SWST_ONE_ON;' applications/trigger.c
-          grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
+          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET IMBAL' applications/app_version.h
 
+          # Preserve original shift semantics: only SWST_OFF is changed.
+          git diff -- applications/trigger.c | grep -F 'case SWST_OFF:'
+          ! git diff -- applications/trigger.c | grep -F 'SWST_GOING_OFF'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_UP'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_DOWN'
+
+          # Live warning is display-only; no motor behavior changes.
+          grep -F 'send_to_display (BATT_1_TOOLOW);' applications/app_sikorski.c
+          grep -F 'send_to_display (BATT_2_TOOLOW);' applications/app_sikorski.c
+          grep -F 'IMBALANCE_WARN_TIME_mS MS2ST(3000)' applications/display.c
+          grep -F 'DISP_WARN' applications/display.c
+          test -z "$(git diff --name-only -- applications/speed.c applications/ready.c mc_interface.c)"
+
+          # Current user settings compiled as defaults.
           grep -F '#define USE_SAFETY_SPEED 0' applications/defaults.h
           grep -F '#define TRIG_ON_TOUT_MS 800' applications/defaults.h
           grep -F '#define TRIG_OFF_TOUT_MS 900' applications/defaults.h
           grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
           grep -F '#define SPEED_RAMPING_RATE 1500' applications/defaults.h
           grep -F '#define MIGRATE_SPEED_MILLISECONDS 5000' applications/defaults.h
+          grep -F '#define SAFETY_SPEED_GUARD_HIGH 6' applications/defaults.h
+          grep -F '#define SAFETY_SPEED_GUARD_LOW  0.5' applications/defaults.h
+          grep -F '#define SAFETY_SPEED_BI_LIMIT   0.30' applications/defaults.h
+          grep -F '#define SAFETY_SPEED_ERPM       900' applications/defaults.h
+          grep -F '#define SAFETY_SPEED_MAX_ERPM   1500' applications/defaults.h
+          grep -F '#define RUNNING_SAFE_OK_CT' applications/defaults.h | grep -F '50'
+          grep -F '#define RUNNING_SAFE_FAIL_CT' applications/defaults.h | grep -F '5'
+          grep -F '#define SAFETY_FILTER_ALPHA 0.2' applications/defaults.h
+          grep -F '#define DISP_BRIGHTNESS 6' applications/defaults.h
+          grep -F '#define DISP_ROTATION 0' applications/defaults.h
+          grep -F '#define DISP_POWER_ON_OFFTIME 10000' applications/defaults.h
+          grep -F '#define DISP_OFF_TRIGGER_BEG_MS 3000' applications/defaults.h
           grep -F '#define DISP_OFF_TRIG_DURATION_MS 6000' applications/defaults.h
+          grep -F '#define DISP_ON_TRIGGER_SPEED_MS 3500' applications/defaults.h
+          grep -F '#define BATTERY_MAX_IMBALANCE 2.0' applications/defaults.h
+          grep -F '#define BATTERY2_SENSE_RATIO 14' applications/defaults.h
+          grep -F '#define LOGGING_OFF 0' applications/defaults.h
           grep -F '#define CRUISE 1' applications/defaults.h
           grep -F '#define JUMP 0' applications/defaults.h
           grep -F '#define JUMP_SPEED 6' applications/defaults.h
           grep -F '#define LOW_MIGRATE 1' applications/defaults.h
           grep -F '#define REVERSE 0' applications/defaults.h
+
+          grep -F '#define DISP_BATT_VOLT1' applications/defaults.h | grep -F '34.0'
+          grep -F '#define DISP_BATT_VOLT2' applications/defaults.h | grep -F '36.0'
+          grep -F '#define DISP_BATT_VOLT3' applications/defaults.h | grep -F '38.0'
 
           grep -F '#define SPEEDS1 1975' applications/defaults.h
           grep -F '#define SPEEDS2 2175' applications/defaults.h
@@ -177,12 +377,7 @@ jobs:
           grep -F '#define LIMITS8 12.50' applications/defaults.h
           grep -F '#define LIMITS9 20.00' applications/defaults.h
 
-          # Explicitly confirm original running shift logic was not modified.
-          git diff -- applications/trigger.c | grep -F 'case SWST_OFF:'
-          ! git diff -- applications/trigger.c | grep -F 'SWST_GOING_OFF'
-          ! git diff -- applications/trigger.c | grep -F 'SPEED_UP'
-          ! git diff -- applications/trigger.c | grep -F 'SPEED_DOWN'
-          test "$(git diff --name-only | sort | tr '\n' ' ')" = "applications/app_version.h applications/defaults.h applications/trigger.c "
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "applications/app_sikorski.c applications/app_version.h applications/defaults.h applications/display.c applications/trigger.c "
 
       - name: Compile HW60 firmware
         shell: bash
@@ -192,31 +387,44 @@ jobs:
           cd BT_VESC
           make clean
           make -j2
-          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
+          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
           cd ..
-          sha256sum BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
-          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
-          strings BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET'
+          echo '=== FINAL ==='
+          sha256sum BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
+          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
+          strings BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET IMBAL'
 
       - name: Create build notes
         shell: bash
         run: |
-          cat > BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_BUILD_NOTES.txt <<'EOF'
-          BT_VESC 2.3 GEORGE 0.4 - SINGLE PRESS + USER PRESET DEFAULTS - HW60
+          cat > BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_BUILD_NOTES.txt <<'EOF'
+          BT_VESC 2.3 GEORGE 0.4 - SINGLE PRESS + PRESET + LIVE IMBALANCE WARNING - HW60
 
-          Base:
-          bwoodill/BT_VESC branch v2.3_GEORGE_0.4
+          Base source:
+          bwoodill/BT_VESC ref v2.3_GEORGE_0.4
+
           Official base binary SHA-256:
           26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958
 
           Validation:
-          The untouched source was compiled with GCC 7.3.1 and reproduced the
-          official GEORGE 0.4 binary byte-for-byte before modifications.
+          Before modifications, the clean source reproduced the official
+          393,208-byte GEORGE 0.4 release binary byte-for-byte with GCC 7.3.1.
 
-          Behavior change:
-          Only SWST_OFF startup behavior is changed: first trigger press sends
-          SPEED_ON and enters SWST_ONE_ON. The original GEORGE running click/shift
-          state machine is otherwise unchanged.
+          Trigger behavior:
+          - Single press starts the scooter.
+          - Original GEORGE running click/shift state machine is otherwise untouched.
+          - No pause/resume motor logic from OPT4/OPT5 is present.
+
+          Live imbalance display:
+          - Battery sensing and motor limiting behavior are unchanged.
+          - Every existing 5-second filtered battery update is compared against $i.
+          - With $x != 0, if battery 1 is lower by more than $i, BATT_1_TOOLOW is sent.
+          - If battery 2 is lower by more than $i, BATT_2_TOOLOW is sent.
+          - While running, the existing battery graph is immediately shown with its
+            existing small 1/2 low-battery marker for 3 seconds.
+          - A user speed-change display event takes priority immediately.
+          - Persistent imbalance re-displays on the next 5-second battery update.
+          - No message is sent to the speed/motor thread by this warning feature.
 
           Compiled reset defaults:
           d=2 M=9 U=0 T=800 t=900 r=1500 m=5000
@@ -227,16 +435,16 @@ jobs:
           L1..L9 = 1.75,2.00,2.40,3.00,4.50,6.00,9.20,12.50,20.00
           B1..B3 = 34.00,36.00,38.00
 
-          These are defaults used if BT_VESC initializes/resets its settings block.
-          Existing persistent settings may survive a flash; verify with $$ after flash.
+          Existing persistent settings may survive a flash. Run $$ after flashing
+          to verify the active configuration.
           EOF
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-single-press-preset
+          name: bt-vesc-single-press-preset-imbal
           path: |
-            BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_HW60.bin
-            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_SOURCE.diff
-            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_BUILD_NOTES.txt
+            BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
+            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_SOURCE.diff
+            BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_BUILD_NOTES.txt
           if-no-files-found: error
