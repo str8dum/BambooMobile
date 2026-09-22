@@ -1,4 +1,4 @@
-name: BT VESC GEORGE OPT5 build
+name: BT VESC GEORGE OPT6 build
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
           cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
           echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Apply OPT5 source modifications
+      - name: Apply OPT6 source modifications
         shell: bash
         run: |
           set -euxo pipefail
@@ -83,15 +83,14 @@ jobs:
                   raise SystemExit(f"{path}: expected one {old!r}, got {s.count(old)}")
               p.write_text(s.replace(old, new, 1))
 
-          # Build identifier.
+          # Identify build.
           replace_text_once(
               "applications/app_version.h",
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
-              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT5"'
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT6"'
           )
 
-          # Compile the user's current known-good BT_VESC tuning as defaults so
-          # a flash-time settings reset comes back with the correct values.
+          # User's known-good BT_VESC settings as compiled defaults.
           defaults = Path("applications/defaults.h")
           s = defaults.read_text()
           pairs = [
@@ -125,28 +124,7 @@ jobs:
               s = s.replace(old, new, 1)
           defaults.write_text(s)
 
-          # Keep all existing MESSAGE numeric values unchanged by appending the
-          # new internal pause/resume messages at the end.
-          p = "applications/msgs.h"
-          L = read_lines(p)
-          i = find_line(L, "BATT_2_TOOLOW,")
-          L[i+1:i+1] = [
-              "\n",
-              "    // Internal trigger/speed coordination for fast release-to-stop.\n",
-              "    SPEED_PAUSE,\n",
-              "    SPEED_RESUME,\n",
-          ]
-          text_tail = [i for i,x in enumerate(L) if '"BATT_1_TOOLOW", "BATT_2_TOOLOW",' in x]
-          if len(text_tail) != 1:
-              raise SystemExit(f"message text tail hits: {text_tail}")
-          bs = chr(92)
-          L[text_tail[0]+1:text_tail[0]+1] = [
-              '    "SPEED_PAUSE", "SPEED_RESUME", ' + bs + '\n'
-          ]
-          write_lines(p, L)
-
-          # Physical trigger debounce: two consecutive samples at the existing
-          # 40 Hz scan rate before an edge is emitted.
+          # Two-sample physical trigger debounce at the existing 40 Hz scan.
           p = "applications/app_sikorski.c"
           L = read_lines(p)
           i = find_line(L, "static uint8_t sw = 1;")
@@ -185,22 +163,11 @@ jobs:
           ]
           write_lines(p, L)
 
-          # Trigger state machine: first press starts immediately. Release/press
-          # edges independently pause/resume motor torque while the existing
-          # multi-click state machine keeps recognizing gestures.
+          # Single-press start only. IMPORTANT: do not alter the original GEORGE
+          # running click/shift state machine. While the user is doing a shift
+          # gesture, motor output remains running exactly as in stock GEORGE.
           p = "applications/trigger.c"
           L = read_lines(p)
-          i = find_line(L, "SW_STATE old_state = state;")
-          L[i+1:i+1] = [
-              "\n",
-              "        // Motor output follows the debounced trigger immediately; click timing\n",
-              "        // continues independently in this state machine. Cruise is intentionally\n",
-              "        // exempt from release-to-pause so its hands-off behavior is preserved.\n",
-              "        if (event == SW_RELEASED && state != SWST_CRUISE)\n",
-              "            send_to_speed (SPEED_PAUSE);\n",
-              "        else if (event == SW_PRESSED)\n",
-              "            send_to_speed (SPEED_RESUME);\n",
-          ]
           off = find_line(L, "case SWST_OFF:")
           on = find_first(L, "case SWST_ON:", off + 1)
           L[off:on] = [
@@ -216,20 +183,12 @@ jobs:
           ]
           write_lines(p, L)
 
-          # Speed controller changes.
+          # Separate startup ramp from speed-change ramp without changing
+          # trigger semantics. Startup remains $r; speed changes use 2x $r.
           p = "applications/speed.c"
           L = read_lines(p)
-
-          # Add paused motor state.
-          i = find_line(L, "MOTOR_START,		// test for obstruction")
-          L[i+1:i+1] = ["    MOTOR_PAUSED,\t\t// trigger released during click-recognition window\n"]
-          i = find_line(L, '{ "MOTOR_OFF", "MOTOR_ON", "MOTOR_START"};')
-          L[i] = '    { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START", "MOTOR_PAUSED"};\n'
-
-          # Separate startup vs speed-change ramp rates.
           i = find_line(L, "#define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running")
           L[i+1:i+1] = [
-              "#define RUNNING_MAX_ERPM 100000 // normal running ERPM ceiling\n",
               "\n",
               "// $r is the startup ramp; speed-level changes use 2x $r.\n",
               "static float ramp_multiplier = 1.0;\n",
@@ -241,113 +200,21 @@ jobs:
           else:
               raise SystemExit("ramping delta not found")
 
-          i = find_line(L, "MODE_OFF, MODE_RUN, MODE_START")
-          L[i] = "    MODE_OFF, MODE_RUN, MODE_START, MODE_PAUSE, MODE_RESUME\n"
-
-          # Replace only the mode-selection body of adjust_speed.
-          fn = find_line(L, "static float adjust_speed (uint8_t user_setting, RUN_MODES mode)")
-          body = find_first(L, "if (mode == MODE_OFF)", fn + 1)
-          log_if = find_first(L, "#if(SPEED_LOG == 1)", body + 1)
-          L[body:log_if] = [
-              "    if (mode == MODE_OFF)\n",
-              "    {\n",
-              "        present_speed = 0.0;\n",
-              "        mc_interface_release_motor ();\n",
-              "        set_max_current(settings->limits[0]);\n",
-              "        return present_speed;\n",
-              "    }\n",
-              "    else if (mode == MODE_PAUSE)\n",
-              "    {\n",
-              "        // Stop torque immediately but retain commanded/ramped speed.\n",
-              "        mc_interface_release_motor ();\n",
-              "        return present_speed;\n",
-              "    }\n",
-              "    else if (mode == MODE_RESUME)\n",
-              "    {\n",
-              "        set_max_ERPM(RUNNING_MAX_ERPM);\n",
-              "        set_max_current(settings->limits[user_setting]);\n",
-              "        if ((conf->m_invert_direction) == 1)\n",
-              "            mc_interface_set_pid_speed (present_speed / 2);\n",
-              "        else\n",
-              "            mc_interface_set_pid_speed (present_speed);\n",
-              "        return present_speed;\n",
-              "    }\n",
-              "    else if (mode == MODE_START)\n",
-              "    {\n",
-              "        set_max_current(settings->guard_limit);\n",
-              "        present_speed = settings->guard_erpm;\n",
-              "        present_speed = limit_speed_by_battery(present_speed);\n",
-              "        set_max_ERPM(settings->guard_max_erpm);\n",
-              "\n",
-              "        if ((conf->m_invert_direction) == 1)\n",
-              "            mc_interface_set_pid_speed (present_speed / 2);\n",
-              "        else\n",
-              "            mc_interface_set_pid_speed (present_speed);\n",
-              "        return present_speed;\n",
-              "    }\n",
-              "    else // MODE_RUN\n",
-              "    {\n",
-              "        set_max_ERPM(RUNNING_MAX_ERPM);\n",
-              "        set_max_current(settings->limits[user_setting]);\n",
-              "        present_speed = ramping (present_speed, get_limited_speed(user_setting));\n",
-              "\n",
-              "        if ((conf->m_invert_direction) == 1)\n",
-              "            mc_interface_set_pid_speed (present_speed / 2);\n",
-              "        else\n",
-              "            mc_interface_set_pid_speed (present_speed);\n",
-              "    }\n",
-              "\n",
-          ]
-          i = find_line(L, 'const char *const mode_str[] = { "OFF", "RUN", "START" };')
-          L[i] = '        const char *const mode_str[] = { "OFF", "RUN", "START", "PAUSE", "RESUM" };\n'
-
-          # Track whether a pause happened during optional safe-start mode.
-          i = find_line(L, "uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed")
-          L[i+1:i+1] = ["    bool paused_from_start = false;\n"]
-
           motor_off = find_line(L, "case MOTOR_OFF:")
           motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
           motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
 
-          # Normal startup uses $r.
+          # Startup/JUMP startup use normal $r.
           i = find_first(L, "case SPEED_ON:", motor_off + 1)
-          L[i+1:i+1] = [
-              "                ramp_multiplier = 1.0;\n",
-              "                paused_from_start = false;\n",
-          ]
+          L[i+1:i+1] = ["                ramp_multiplier = 1.0;\n"]
           i = find_first(L, "case JUMP_SPEED_START: //new jump speed", motor_off + 1)
           if i < motor_on:
               L[i+1:i+1] = ["                ramp_multiplier = 1.0;\n"]
 
-          # Re-find state boundaries after insertions.
           motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
           motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
 
-          # Immediate torque pause in normal running state. IMPORTANT: do not leave\n          # MOTOR_ON here; otherwise the later SPEED_UP/SPEED_DOWN gesture event is\n          # interpreted while paused and gets lost.
-          i = find_first(L, "case SPEED_OFF:", motor_on + 1)
-          if i >= motor_start:
-              raise SystemExit("MOTOR_ON SPEED_OFF boundary error")
-          L[i:i] = [
-              "            case SPEED_PAUSE:\n",
-              "                // Physical trigger is up, but this is not yet a logical stop.\n",
-              "                // Keep MOTOR_ON so the existing click state machine can still\n",
-              "                // deliver SPEED_UP/SPEED_DOWN if the trigger is re-pressed.\n",
-              "                set_timeout(TIME_INFINITE);\n",
-              "                adjust_speed (user_speed, MODE_PAUSE);\n",
-              "                break;\n",
-              "            case SPEED_RESUME:\n",
-              "                // Re-press inside the click window: restore torque at the retained\n",
-              "                // speed without resetting user_speed or starting migration.\n",
-              "                present_speed = adjust_speed (user_speed, MODE_RESUME);\n",
-              "                if (present_speed == get_limited_speed(user_speed))\n",
-              "                    set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));\n",
-              "                else\n",
-              "                    set_timeout(MS2ST(RAMPING_TIME_MS));\n",
-              "                break;\n",
-          ]
-
-          # Speed changes use 2x $r.
-          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
+          # Speed-level changes use 2x $r.
           for case_name, anchor in [
               ("case SPEED_UP:", "increase (&user_speed);"),
               ("case SPEED_DOWN:", "decrease (&user_speed);"),
@@ -359,99 +226,40 @@ jobs:
               ai = find_first(L, anchor, ci + 1)
               L[ai+1:ai+1] = ["                ramp_multiplier = 2.0;\n"]
 
-          # Safe-start release also removes torque, but remembers that resume must
-          # return to the safety check rather than bypassing it.
-          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
-          i = find_first(L, "case SPEED_OFF:		// user gave up and turned motor off.", motor_start + 1)
-          L[i:i] = [
-              "            case SPEED_PAUSE:\n",
-              "                state = MOTOR_PAUSED;\n",
-              "                paused_from_start = true;\n",
-              "                set_timeout(TIME_INFINITE);\n",
-              "                adjust_speed (user_speed, MODE_PAUSE);\n",
-              "                send_to_ready (READY_OFF);\n",
-              "                break;\n",
-          ]
-
-          # When safe-start succeeds, switch back to startup ramp semantics.
+          # If safe-start is ever enabled, completion returns to startup ramp.
           i = find_first(L, "case SPEED_READY:   // READY thread approved start conditions", motor_start + 1)
           state_line = find_first(L, "state = MOTOR_ON;", i + 1)
-          L[state_line+1:state_line+1] = [
-              "                paused_from_start = false;\n",
-              "                ramp_multiplier = 1.0;\n",
-          ]
+          L[state_line+1:state_line+1] = ["                ramp_multiplier = 1.0;\n"]
 
-          # Insert paused state before the outer switch default.
-          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
-          inner_default = find_first(L, "default:", motor_start + 1)
-          outer_default = find_first(L, "default:", inner_default + 1)
-          paused_block = [
-              "        case MOTOR_PAUSED:\n",
-              "            switch (event)\n",
-              "            {\n",
-              "            case SPEED_RESUME:\n",
-              "                if (paused_from_start && settings->use_safety)\n",
-              "                {\n",
-              "                    state = MOTOR_START;\n",
-              "                    set_timeout(TIME_INFINITE);\n",
-              "                    send_to_ready (READY_ON);\n",
-              "                }\n",
-              "                else\n",
-              "                {\n",
-              "                    state = MOTOR_ON;\n",
-              "                    present_speed = adjust_speed (user_speed, MODE_RESUME);\n",
-              "                    // Do not alter display state for a transient click pause/resume.\n",
-              "                    if (present_speed == get_limited_speed(user_speed))\n",
-              "                        set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));\n",
-              "                    else\n",
-              "                        set_timeout(MS2ST(RAMPING_TIME_MS));\n",
-              "                }\n",
-              "                break;\n",
-              "\n",
-              "            case SPEED_OFF:\n",
-              "                state = MOTOR_OFF;\n",
-              "                paused_from_start = false;\n",
-              "                send_to_display (DISP_OFF_TRIGGER);\n",
-              "                set_timeout(MS2ST(settings->migrate_rate));\n",
-              "                adjust_speed (user_speed, MODE_OFF);\n",
-              "                break;\n",
-              "\n",
-              "            case SPEED_PAUSE:\n",
-              "                break;\n",
-              "\n",
-              "            default:\n",
-              "                break;\n",
-              "            }\n",
-              "            break;\n",
-          ]
-          L[outer_default:outer_default] = paused_block
           write_lines(p, L)
-
-          print("OPT5 source modifications applied successfully.")
+          print("OPT6 source modifications applied successfully.")
           PY
 
           git diff --check
-          git diff > ../BT_VESC_GEORGE04_OPT5_SOURCE.diff
+          git diff > ../BT_VESC_GEORGE04_OPT6_SOURCE.diff
 
       - name: Static source assertions
         shell: bash
         run: |
           set -euxo pipefail
           cd BT_VESC
-          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT5' applications/app_version.h
-          grep -F 'SPEED_PAUSE' applications/msgs.h
-          grep -F 'SPEED_RESUME' applications/msgs.h
-          grep -F 'case SPEED_RESUME:' applications/speed.c
-          grep -F 'ramp_multiplier = 2.0' applications/speed.c
+          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT6' applications/app_version.h
           grep -F 'stable_count >= 2' applications/app_sikorski.c
           grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
+          grep -F 'case SWST_GOING_OFF:' applications/trigger.c
+          grep -F 'send_to_speed (SPEED_DOWN);' applications/trigger.c
+          grep -F 'send_to_speed (SPEED_UP);' applications/trigger.c
+          ! grep -F 'SPEED_PAUSE' applications/trigger.c
+          ! grep -F 'SPEED_RESUME' applications/trigger.c
+          ! grep -F 'MOTOR_PAUSED' applications/speed.c
+          grep -F 'ramp_multiplier = 2.0' applications/speed.c
           grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
           grep -F '#define SPEEDS9 4700' applications/defaults.h
           grep -F '#define LIMITS9 20.00' applications/defaults.h
           grep -F '#define CRUISE 1' applications/defaults.h
           grep -F '#define LOW_MIGRATE 1' applications/defaults.h
 
-      - name: Compile OPT5 HW60 firmware
+      - name: Compile OPT6 HW60 firmware
         shell: bash
         run: |
           set -euxo pipefail
@@ -459,50 +267,48 @@ jobs:
           cd BT_VESC
           make clean
           make -j2
-          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
+          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
           cd ..
-          echo '=== FINAL OPT5 ==='
-          sha256sum BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
-          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
-          strings BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT5'
+          echo '=== FINAL OPT6 ==='
+          sha256sum BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
+          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
+          strings BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT6'
 
       - name: Create build notes
         shell: bash
         run: |
-          cat > BT_VESC_GEORGE04_OPT5_BUILD_NOTES.txt <<'EOF'
-          BT_VESC 2.3 GEORGE 0.4 OPT5 - HW60
-          
+          cat > BT_VESC_GEORGE04_OPT6_BUILD_NOTES.txt <<'EOF'
+          BT_VESC 2.3 GEORGE 0.4 OPT6 - HW60
+
           Base source: bwoodill/BT_VESC branch v2.3_GEORGE_0.4
           Base official binary SHA-256:
           26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958
-          
-          Toolchain:
-          gcc-arm-none-eabi-7-2018-q2-update (GCC 7.3.1)
-          Toolchain archive SHA-256:
-          bb17109f0ee697254a5d4ae6e5e01440e3ea8f0277f2e8169bf95d07c7d5fe69
-          
+
           Baseline validation:
-          Clean source compiled with the exact toolchain reproduced the official
-          393,208-byte GEORGE 0.4 release binary byte-for-byte before modifications.
-          
-          OPT5 changes:
-          1. Single-press start retained.
-          2. Trigger release pauses motor torque after 2-sample debounce while click
-             recognition continues. True stop occurs only after the gesture window.
-          3. Two consecutive trigger samples required at the 40 Hz scan rate.
-          4. $r remains startup ramp. Speed level changes use 2x $r.
-          5. Brief click pauses do not start speed migration. True stop does.
-          6. Compiled BT_VESC defaults match the user's known-good tuned settings.
-          
+          Clean source compiled with the exact GCC 7.3.1 toolchain reproduced the
+          official GEORGE 0.4 binary byte-for-byte before modifications.
+
+          OPT6 behavior:
+          - Single press starts the motor.
+          - Original GEORGE running click/shift state machine is preserved.
+          - Motor remains running during the release/re-press sequence used to shift.
+          - Motor stops only when the original trigger timeout decides the release was
+            a true stop (with current $T 800 timing).
+          - Two-sample trigger debounce at 40 Hz.
+          - Startup ramp uses $r (1500 current setting).
+          - Speed-level changes use 2x $r (3000 with current setting).
+          - Migration begins only after a true SPEED_OFF, as in original GEORGE.
+          - User's tuned settings are compiled as defaults.
+
           Bench test with prop removed/secured before water use.
           EOF
 
       - name: Upload final firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-george04-opt5
+          name: bt-vesc-george04-opt6
           path: |
-            BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
-            BT_VESC_GEORGE04_OPT5_SOURCE.diff
-            BT_VESC_GEORGE04_OPT5_BUILD_NOTES.txt
+            BT_VESC_2.3_GEORGE0.4_OPT6_HW60.bin
+            BT_VESC_GEORGE04_OPT6_SOURCE.diff
+            BT_VESC_GEORGE04_OPT6_BUILD_NOTES.txt
           if-no-files-found: error
