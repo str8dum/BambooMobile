@@ -1,0 +1,86 @@
+name: BT VESC probe build
+
+on:
+  push:
+    branches:
+      - bt-vesc-george-opt-build
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out BT_VESC v2.3
+        uses: actions/checkout@v4
+        with:
+          repository: bwoodill/BT_VESC
+          ref: v2.3
+          path: BT_VESC
+
+      - name: Inspect GEORGE 0.4 release package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L --retry 3 -o /tmp/v2.3_george_0.4.zip \
+            https://github.com/bwoodill/BT_VESC/releases/download/v2.3/v2.3_george_0.4.zip
+          mkdir -p /tmp/george
+          unzip -q /tmp/v2.3_george_0.4.zip -d /tmp/george
+          echo "=== GEORGE archive files ==="
+          find /tmp/george -type f -printf '%p %s bytes\n' | sort
+          echo "=== GEORGE hashes ==="
+          find /tmp/george -type f -exec sha256sum {} \; | sort -k2
+          echo "=== GEORGE version strings ==="
+          find /tmp/george -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
+            echo "--- $f ---"
+            strings "$f" | grep -E 'BT_VESC VERSION|GEORGE|FRED' || true
+          done
+
+      - name: Install exact ARM GCC 7-2018-q2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          URL='https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2018q2/gcc-arm-none-eabi-7-2018-q2-update-linux.tar.bz2'
+          curl -L --retry 3 -o /tmp/gcc-arm-none-eabi.tar.bz2 "$URL"
+          echo 'bb17109f0ee697254a5d4ae6e5e01440e3ea8f0277f2e8169bf95d07c7d5fe69  /tmp/gcc-arm-none-eabi.tar.bz2' | sha256sum -c -
+          mkdir -p "$HOME/toolchains"
+          tar -xjf /tmp/gcc-arm-none-eabi.tar.bz2 -C "$HOME/toolchains"
+          echo "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin" >> "$GITHUB_PATH"
+          "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin/arm-none-eabi-gcc" --version
+
+      - name: Build HW60 variants from clean v2.3 tag
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin:$PATH"
+          cd BT_VESC
+          mkdir -p ../probe_bins
+
+          build_one() {
+            local name="$1"
+            local args="$2"
+            make clean || true
+            touch conf_general.h
+            make -j2 build_args="$args" USE_VERBOSE_COMPILE=no
+            cp build/BLDC_4_BT_VESC.bin "../probe_bins/$name.bin"
+          }
+
+          build_one hw60 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h"'
+          build_one hw60_mk3 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h" -DHW60_IS_MK3'
+          build_one hw60_mk4 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h" -DHW60_IS_MK4'
+
+          cd ..
+          echo "=== source-build hashes ==="
+          sha256sum probe_bins/*.bin
+          stat -c '%n %s bytes' probe_bins/*.bin
+          for f in probe_bins/*.bin; do
+            echo "--- $f ---"
+            strings "$f" | grep -E 'BT_VESC VERSION|GEORGE|FRED' || true
+          done
+
+      - name: Upload probe binaries and GEORGE release
+        uses: actions/upload-artifact@v4
+        with:
+          name: bt-vesc-probe
+          path: |
+            probe_bins/*.bin
+            /tmp/v2.3_george_0.4.zip
+          if-no-files-found: error
