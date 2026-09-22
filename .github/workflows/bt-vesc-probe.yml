@@ -1,4 +1,4 @@
-name: BT VESC GEORGE SINGLE PRESS PRESET IMBAL build
+name: BT VESC GEORGE live imbalance build
 
 on:
   push:
@@ -9,12 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Check out build helper
+      - name: Check out helper repository
         uses: actions/checkout@v4
         with:
-          ref: bt-vesc-george-opt-build
-          path: infra
-          fetch-depth: 1
+          path: helper
 
       - name: Check out exact GEORGE 0.4 source
         uses: actions/checkout@v4
@@ -30,6 +28,7 @@ jobs:
           set -euxo pipefail
           curl -L --retry 3 -o /tmp/v2.3_george_0.4.zip \
             https://github.com/bwoodill/BT_VESC/releases/download/v2.3/v2.3_george_0.4.zip
+          rm -rf /tmp/george
           mkdir -p /tmp/george
           unzip -q /tmp/v2.3_george_0.4.zip -d /tmp/george
           echo '26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958  /tmp/george/BLDC_4_BT_VESC.bin' | sha256sum -c -
@@ -57,32 +56,21 @@ jobs:
           cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
           echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Apply single press preset and live imbalance warning
+      - name: Apply single press preset and live imbalance patch
         shell: bash
         run: |
           set -euxo pipefail
-          python3 infra/tools/bt_vesc_live_imbal_patch.py BT_VESC
+          python3 helper/tools/bt_vesc_live_imbal_patch.py BT_VESC
           cd BT_VESC
           git diff --check
-          git diff > ../BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_SOURCE.diff
 
-      - name: Verify source changes
+      - name: Verify intended changes only
         shell: bash
         run: |
           set -euxo pipefail
           cd BT_VESC
+
           grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET IMBAL' applications/app_version.h
-
-          git diff -- applications/trigger.c | grep -F 'case SWST_OFF:'
-          ! git diff -- applications/trigger.c | grep -F 'SWST_GOING_OFF'
-          ! git diff -- applications/trigger.c | grep -F 'SPEED_UP'
-          ! git diff -- applications/trigger.c | grep -F 'SPEED_DOWN'
-
-          grep -F 'send_to_display (BATT_1_TOOLOW);' applications/app_sikorski.c
-          grep -F 'send_to_display (BATT_2_TOOLOW);' applications/app_sikorski.c
-          grep -F 'IMBALANCE_WARN_TIME_mS MS2ST(3000)' applications/display.c
-          grep -F 'DISP_WARN' applications/display.c
-          test -z "$(git diff --name-only -- applications/speed.c applications/ready.c mc_interface.c)"
 
           grep -F '#define USE_SAFETY_SPEED 0' applications/defaults.h
           grep -F '#define TRIG_ON_TOUT_MS 800' applications/defaults.h
@@ -90,9 +78,9 @@ jobs:
           grep -F '#define SPEED_DEFAULT 2' applications/defaults.h
           grep -F '#define SPEED_RAMPING_RATE 1500' applications/defaults.h
           grep -F '#define MIGRATE_SPEED_MILLISECONDS 5000' applications/defaults.h
+          grep -F '#define DISP_OFF_TRIG_DURATION_MS 6000' applications/defaults.h
           grep -F '#define BATTERY_MAX_IMBALANCE 2.0' applications/defaults.h
           grep -F '#define BATTERY2_SENSE_RATIO 14' applications/defaults.h
-          grep -F '#define DISP_OFF_TRIG_DURATION_MS 6000' applications/defaults.h
           grep -F '#define CRUISE 1' applications/defaults.h
           grep -F '#define JUMP 0' applications/defaults.h
           grep -F '#define JUMP_SPEED 6' applications/defaults.h
@@ -119,7 +107,20 @@ jobs:
           grep -F '#define LIMITS8 12.50' applications/defaults.h
           grep -F '#define LIMITS9 20.00' applications/defaults.h
 
+          grep -F 'send_to_display (BATT_1_TOOLOW);' applications/app_sikorski.c
+          grep -F 'send_to_display (BATT_2_TOOLOW);' applications/app_sikorski.c
+          grep -F 'IMBALANCE_WARN_TIME_mS MS2ST(3000)' applications/display.c
+          grep -F 'DISP_WARN' applications/display.c
+
+          git diff -- applications/trigger.c | grep -F 'case SWST_OFF:'
+          ! git diff -- applications/trigger.c | grep -F 'SWST_GOING_OFF'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_UP'
+          ! git diff -- applications/trigger.c | grep -F 'SPEED_DOWN'
+
+          test -z "$(git diff --name-only -- applications/speed.c applications/ready.c mc_interface.c)"
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "applications/app_sikorski.c applications/app_version.h applications/defaults.h applications/display.c applications/trigger.c "
+
+          git diff > ../BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_SOURCE.diff
 
       - name: Compile HW60 firmware
         shell: bash
@@ -131,7 +132,6 @@ jobs:
           make -j2
           cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
           cd ..
-          echo '=== FINAL ==='
           sha256sum BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
           stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin
           strings BT_VESC_2.3_GEORGE0.4_SINGLE_PRESS_PRESET_IMBAL_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 SINGLE PRESET IMBAL'
@@ -140,24 +140,28 @@ jobs:
         shell: bash
         run: |
           cat > BT_VESC_GEORGE04_SINGLE_PRESS_PRESET_IMBAL_BUILD_NOTES.txt <<'EOF'
-          BT_VESC 2.3 GEORGE 0.4 - SINGLE PRESS + PRESET + LIVE IMBALANCE - HW60
+          BT_VESC 2.3 GEORGE 0.4
+          SINGLE PRESS + USER PRESET + LIVE IMBALANCE WARNING
+          HW60
 
-          Clean-source validation:
-          Exact v2.3_GEORGE_0.4 source reproduced the official 393,208-byte
-          GEORGE 0.4 binary byte-for-byte before modification.
+          Base: bwoodill/BT_VESC ref v2.3_GEORGE_0.4
+          Official base SHA-256:
+          26af733e32659ce15542ba67d8a0a3cc78dd008ecab4933fea6541390e247958
+
+          Validation:
+          Clean source reproduced the official GEORGE 0.4 binary byte-for-byte
+          before modifications using ARM GCC 7.3.1.
 
           Behavior:
           - Single press starts the scooter.
           - Original GEORGE running click/shift behavior remains unchanged.
-          - Battery sensing and motor speed-limiting behavior remain unchanged.
-          - Every existing 5-second filtered battery update checks the existing
-            $i imbalance threshold.
-          - With $x != 0, a >$i imbalance while running immediately shows the
-            existing battery graph with the small 1/2 marker for the lower pack.
-          - Warning stays visible 3 seconds and repeats on subsequent 5-second
-            updates while the imbalance persists.
-          - Speed-change display events take priority.
-          - The warning feature never sends a command to the speed/motor thread.
+          - Existing battery sensing and speed limiting remain unchanged.
+          - Every existing 5-second filtered battery update checks $i.
+          - If pack difference exceeds $i=2.00 V while running, the existing
+            battery graph plus small 1/2 low-pack marker is displayed for 3 sec.
+          - Persistent imbalance re-warns on the next 5-second update.
+          - Speed-change display feedback takes priority.
+          - The warning code sends no motor/speed command.
 
           Compiled reset defaults:
           d=2 M=9 U=0 T=800 t=900 r=1500 m=5000
@@ -168,7 +172,8 @@ jobs:
           L1..L9 = 1.75,2.00,2.40,3.00,4.50,6.00,9.20,12.50,20.00
           B1..B3 = 34.00,36.00,38.00
 
-          Run $$ after flashing to verify active persistent settings.
+          Existing persistent settings can survive a flash. Run $$ after flashing
+          to verify the active values.
           EOF
 
       - name: Upload artifact
