@@ -1,4 +1,4 @@
-name: BT VESC probe build
+name: BT VESC baseline validation
 
 on:
   push:
@@ -9,14 +9,14 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Check out BT_VESC v2.3
+      - name: Check out GEORGE 0.4 source branch
         uses: actions/checkout@v4
         with:
           repository: bwoodill/BT_VESC
-          ref: v2.3
+          ref: v2.3_GEORGE_0.4
           path: BT_VESC
 
-      - name: Inspect GEORGE 0.4 release package
+      - name: Download official GEORGE 0.4 release binary
         shell: bash
         run: |
           set -euxo pipefail
@@ -24,15 +24,9 @@ jobs:
             https://github.com/bwoodill/BT_VESC/releases/download/v2.3/v2.3_george_0.4.zip
           mkdir -p /tmp/george
           unzip -q /tmp/v2.3_george_0.4.zip -d /tmp/george
-          echo "=== GEORGE archive files ==="
-          find /tmp/george -type f -printf '%p %s bytes\n' | sort
-          echo "=== GEORGE hashes ==="
-          find /tmp/george -type f -exec sha256sum {} \; | sort -k2
-          echo "=== GEORGE version strings ==="
-          find /tmp/george -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
-            echo "--- $f ---"
-            strings "$f" | grep -E 'BT_VESC VERSION|GEORGE|FRED' || true
-          done
+          sha256sum /tmp/george/BLDC_4_BT_VESC.bin
+          stat -c '%n %s bytes' /tmp/george/BLDC_4_BT_VESC.bin
+          strings /tmp/george/BLDC_4_BT_VESC.bin | grep -E 'BT_VESC VERSION|GEORGE'
 
       - name: Install exact ARM GCC 7-2018-q2
         shell: bash
@@ -46,41 +40,31 @@ jobs:
           echo "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin" >> "$GITHUB_PATH"
           "$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin/arm-none-eabi-gcc" --version
 
-      - name: Build HW60 variants from clean v2.3 tag
+      - name: Build untouched GEORGE 0.4 baseline
         shell: bash
         run: |
           set -euxo pipefail
           export PATH="$HOME/toolchains/gcc-arm-none-eabi-7-2018-q2-update/bin:$PATH"
           cd BT_VESC
-          mkdir -p ../probe_bins
-
-          build_one() {
-            local name="$1"
-            local args="$2"
-            make clean || true
-            touch conf_general.h
-            make -j2 build_args="$args" USE_VERBOSE_COMPILE=no
-            cp build/BLDC_4_BT_VESC.bin "../probe_bins/$name.bin"
-          }
-
-          build_one hw60 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h"'
-          build_one hw60_mk3 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h" -DHW60_IS_MK3'
-          build_one hw60_mk4 '-DHW_SOURCE="hw_60.c" -DHW_HEADER="hw_60.h" -DHW60_IS_MK4'
-
+          make clean || true
+          make -j2
+          cp build/BLDC_4_BT_VESC.bin ../GEORGE04_SOURCE_BUILD.bin
           cd ..
-          echo "=== source-build hashes ==="
-          sha256sum probe_bins/*.bin
-          stat -c '%n %s bytes' probe_bins/*.bin
-          for f in probe_bins/*.bin; do
-            echo "--- $f ---"
-            strings "$f" | grep -E 'BT_VESC VERSION|GEORGE|FRED' || true
-          done
+          echo '=== source build ==='
+          sha256sum GEORGE04_SOURCE_BUILD.bin
+          stat -c '%n %s bytes' GEORGE04_SOURCE_BUILD.bin
+          strings GEORGE04_SOURCE_BUILD.bin | grep -E 'BT_VESC VERSION|GEORGE'
+          echo '=== compare to official release ==='
+          cmp -l GEORGE04_SOURCE_BUILD.bin /tmp/george/BLDC_4_BT_VESC.bin | head -20 || true
+          if cmp -s GEORGE04_SOURCE_BUILD.bin /tmp/george/BLDC_4_BT_VESC.bin; then
+            echo 'EXACT_MATCH=YES'
+          else
+            echo 'EXACT_MATCH=NO'
+          fi
 
-      - name: Upload probe binaries and GEORGE release
+      - name: Upload baseline build
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-probe
-          path: |
-            probe_bins/*.bin
-            /tmp/v2.3_george_0.4.zip
+          name: bt-vesc-george04-baseline
+          path: GEORGE04_SOURCE_BUILD.bin
           if-no-files-found: error
