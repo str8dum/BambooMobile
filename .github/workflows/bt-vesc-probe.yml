@@ -74,24 +74,26 @@ jobs:
           )
 
           # Only behavior change: first trigger press starts immediately.
-          replace_once(
-              "applications/trigger.c",
-              """        case SWST_OFF:
-            if (event == SW_PRESSED)
-            {
-                state = SWST_GOING_ON;
-                timeout = MS2ST(settings->trig_on_time);
-            }
-            break;""",
-              """        case SWST_OFF:
-            if (event == SW_PRESSED)
-            {
-                state = SWST_ONE_ON;
-                timeout = TIME_INFINITE;
-                send_to_speed (SPEED_ON);
-            }
-            break;"""
-          )
+          tp=Path("applications/trigger.c")
+          L=tp.read_text().splitlines(keepends=True)
+          off=[i for i,x in enumerate(L) if x.strip()=="case SWST_OFF:"]
+          if len(off)!=1:
+              raise SystemExit(f"trigger.c SWST_OFF hits: {off}")
+          off=off[0]
+          on=next((i for i in range(off+1,len(L)) if L[i].strip()=="case SWST_ON:"),None)
+          if on is None:
+              raise SystemExit("trigger.c SWST_ON not found after SWST_OFF")
+          L[off:on]=[
+              "        case SWST_OFF:\n",
+              "            if (event == SW_PRESSED)\n",
+              "            {\n",
+              "                state = SWST_ONE_ON;\n",
+              "                timeout = TIME_INFINITE;\n",
+              "                send_to_speed (SPEED_ON);\n",
+              "            }\n",
+              "            break;\n",
+          ]
+          tp.write_text(''.join(L))
 
           # Compile the user's current BT_VESC tuning into reset defaults.
           p=Path("applications/defaults.h")
