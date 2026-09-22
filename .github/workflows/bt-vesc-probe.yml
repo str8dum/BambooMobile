@@ -58,517 +58,365 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
+          def read_lines(path):
+              return Path(path).read_text().splitlines(keepends=True)
+
+          def write_lines(path, lines):
+              Path(path).write_text(''.join(lines))
+
+          def find_line(lines, stripped, start=0):
+              hits = [i for i in range(start, len(lines)) if lines[i].strip() == stripped]
+              if len(hits) != 1:
+                  raise SystemExit(f"{stripped!r}: expected one line after {start}, got {hits}")
+              return hits[0]
+
+          def find_first(lines, stripped, start=0):
+              for i in range(start, len(lines)):
+                  if lines[i].strip() == stripped:
+                      return i
+              raise SystemExit(f"{stripped!r}: line not found after {start}")
+
+          def replace_text_once(path, old, new):
               p = Path(path)
               s = p.read_text()
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f"{path}: expected 1 match, got {n}\n--- needle ---\n{old}")
+              if s.count(old) != 1:
+                  raise SystemExit(f"{path}: expected one {old!r}, got {s.count(old)}")
               p.write_text(s.replace(old, new, 1))
 
-          # ------------------------------------------------------------------
-          # Identify this customized build.
-          # ------------------------------------------------------------------
-          replace_once(
+          # Build identifier.
+          replace_text_once(
               "applications/app_version.h",
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT4"'
           )
 
-          # ------------------------------------------------------------------
-          # Preserve the user's known-good BT_VESC settings as compiled defaults.
-          # This protects against the settings reset observed after firmware flash.
-          # ------------------------------------------------------------------
+          # Compile the user's current known-good BT_VESC tuning as defaults so
+          # a flash-time settings reset comes back with the correct values.
           defaults = Path("applications/defaults.h")
           s = defaults.read_text()
-          pairs = {
-              "#define TRIG_ON_TOUT_MS 400": "#define TRIG_ON_TOUT_MS 800",
-              "#define TRIG_OFF_TOUT_MS 500": "#define TRIG_OFF_TOUT_MS 900",
-              "#define SPEED_DEFAULT 3": "#define SPEED_DEFAULT 2",
-              "#define SPEEDS1 1525": "#define SPEEDS1 1975",
-              "#define SPEEDS2 2300": "#define SPEEDS2 2175",
-              "#define SPEEDS3 3100": "#define SPEEDS3 2350",
-              "#define SPEEDS4 3525": "#define SPEEDS4 2525",
-              "#define SPEEDS5 3900": "#define SPEEDS5 2950",
-              "#define SPEEDS6 4150": "#define SPEEDS6 3250",
-              "#define SPEEDS7 4450": "#define SPEEDS7 3975",
-              "#define SPEEDS8 4850": "#define SPEEDS8 4150",
-              "#define SPEEDS9 5000": "#define SPEEDS9 4700",
-              "#define LIMITS1 1": "#define LIMITS1 1.75",
-              "#define LIMITS2 2.2": "#define LIMITS2 2.00",
-              "#define LIMITS3 3.8": "#define LIMITS3 2.40",
-              "#define LIMITS4 6.2": "#define LIMITS4 3.00",
-              "#define LIMITS5 9.6": "#define LIMITS5 4.50",
-              "#define LIMITS6 12.8": "#define LIMITS6 6.00",
-              "#define LIMITS7 17": "#define LIMITS7 9.20",
-              "#define LIMITS8 22.8": "#define LIMITS8 12.50",
-              "#define LIMITS9 23": "#define LIMITS9 20.00",
-              "#define CRUISE 0": "#define CRUISE 1",
-              "#define LOW_MIGRATE 0": "#define LOW_MIGRATE 1",
-          }
-          for old, new in pairs.items():
+          pairs = [
+              ("#define TRIG_ON_TOUT_MS 400", "#define TRIG_ON_TOUT_MS 800"),
+              ("#define TRIG_OFF_TOUT_MS 500", "#define TRIG_OFF_TOUT_MS 900"),
+              ("#define SPEED_DEFAULT 3", "#define SPEED_DEFAULT 2"),
+              ("#define SPEEDS1 1525", "#define SPEEDS1 1975"),
+              ("#define SPEEDS2 2300", "#define SPEEDS2 2175"),
+              ("#define SPEEDS3 3100", "#define SPEEDS3 2350"),
+              ("#define SPEEDS4 3525", "#define SPEEDS4 2525"),
+              ("#define SPEEDS5 3900", "#define SPEEDS5 2950"),
+              ("#define SPEEDS6 4150", "#define SPEEDS6 3250"),
+              ("#define SPEEDS7 4450", "#define SPEEDS7 3975"),
+              ("#define SPEEDS8 4850", "#define SPEEDS8 4150"),
+              ("#define SPEEDS9 5000", "#define SPEEDS9 4700"),
+              ("#define LIMITS1 1", "#define LIMITS1 1.75"),
+              ("#define LIMITS2 2.2", "#define LIMITS2 2.00"),
+              ("#define LIMITS3 3.8", "#define LIMITS3 2.40"),
+              ("#define LIMITS4 6.2", "#define LIMITS4 3.00"),
+              ("#define LIMITS5 9.6", "#define LIMITS5 4.50"),
+              ("#define LIMITS6 12.8", "#define LIMITS6 6.00"),
+              ("#define LIMITS7 17", "#define LIMITS7 9.20"),
+              ("#define LIMITS8 22.8", "#define LIMITS8 12.50"),
+              ("#define LIMITS9 23", "#define LIMITS9 20.00"),
+              ("#define CRUISE 0", "#define CRUISE 1"),
+              ("#define LOW_MIGRATE 0", "#define LOW_MIGRATE 1"),
+          ]
+          for old, new in pairs:
               if s.count(old) != 1:
-                  raise SystemExit(f"applications/defaults.h: expected exactly one {old!r}, got {s.count(old)}")
+                  raise SystemExit(f"applications/defaults.h: expected one {old!r}, got {s.count(old)}")
               s = s.replace(old, new, 1)
           defaults.write_text(s)
 
-          # ------------------------------------------------------------------
-          # New internal messages. Append them so all existing message numbers
-          # remain unchanged.
-          # ------------------------------------------------------------------
-          replace_once(
-              "applications/msgs.h",
-              """    BATT_1_TOOLOW,
-              BATT_2_TOOLOW,
-
-              MESSAGE_EOL,""",
-              """    BATT_1_TOOLOW,
-              BATT_2_TOOLOW,
-
-              // Internal trigger/speed coordination for fast release-to-stop.
-              SPEED_PAUSE,
-              SPEED_RESUME,
-
-              MESSAGE_EOL,"""
-          )
-          msgp = Path("applications/msgs.h")
-          ms = msgp.read_text()
+          # Keep all existing MESSAGE numeric values unchanged by appending the
+          # new internal pause/resume messages at the end.
+          p = "applications/msgs.h"
+          L = read_lines(p)
+          i = find_line(L, "BATT_2_TOOLOW,")
+          L[i+1:i+1] = [
+              "\n",
+              "    // Internal trigger/speed coordination for fast release-to-stop.\n",
+              "    SPEED_PAUSE,\n",
+              "    SPEED_RESUME,\n",
+          ]
+          text_tail = [i for i,x in enumerate(L) if '"BATT_1_TOOLOW", "BATT_2_TOOLOW",' in x]
+          if len(text_tail) != 1:
+              raise SystemExit(f"message text tail hits: {text_tail}")
           bs = chr(92)
-          old = '    "BATT_1_TOOLOW", "BATT_2_TOOLOW", ' + bs + '\n}'
-          new = ('    "BATT_1_TOOLOW", "BATT_2_TOOLOW", ' + bs + '\n'
-                 '    "SPEED_PAUSE", "SPEED_RESUME", ' + bs + '\n}')
-          if ms.count(old) != 1:
-              raise SystemExit(f"applications/msgs.h: expected one message-text tail, got {ms.count(old)}")
-          msgp.write_text(ms.replace(old, new, 1))
+          L[text_tail[0]+1:text_tail[0]+1] = [
+              '    "SPEED_PAUSE", "SPEED_RESUME", ' + bs + '\n'
+          ]
+          write_lines(p, L)
 
-          # ------------------------------------------------------------------
-          # Two consecutive 40 Hz samples are required before reporting an edge.
-          # ------------------------------------------------------------------
-          replace_once(
-              "applications/app_sikorski.c",
-              """    static uint8_t sw = 1;
-              bool trigger_pressed = false;""",
-              """    // Debounce the physical trigger: require two consecutive 40 Hz
-              // samples before reporting a state change (~25-50 ms).
-              static uint8_t raw_last = 1;
-              static uint8_t stable_state = 1;
-              static uint8_t stable_count = 0;
-              bool trigger_pressed = false;"""
-          )
-          replace_once(
-              "applications/app_sikorski.c",
-              """        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN);
-              if (trigger_pressed)
-              {
-                  if (sw == 0) // debounce
-                      send_to_trigger (SW_PRESSED);
-                  sw = 1;
-              }
-              else
-              {
-                  if (sw == 1) // debounce
-                      send_to_trigger (SW_RELEASED);
-                  sw = 0;
-              }""",
-              """        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN) ? true : false;
+          # Physical trigger debounce: two consecutive samples at the existing
+          # 40 Hz scan rate before an edge is emitted.
+          p = "applications/app_sikorski.c"
+          L = read_lines(p)
+          i = find_line(L, "static uint8_t sw = 1;")
+          if L[i+1].strip() != "bool trigger_pressed = false;":
+              raise SystemExit("unexpected trigger declaration layout")
+          L[i:i+2] = [
+              "    // Two-sample debounce at the existing 40 Hz scan rate (~25-50 ms).\n",
+              "    static uint8_t raw_last = 1;\n",
+              "    static uint8_t stable_state = 1;\n",
+              "    static uint8_t stable_count = 0;\n",
+              "    bool trigger_pressed = false;\n",
+          ]
+          start = find_line(L, "trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN);")
+          end = find_first(L, "int i = 0;", start + 1)
+          L[start:end] = [
+              "        trigger_pressed = palReadPad(HW_ICU_GPIO, HW_ICU_PIN) ? true : false;\n",
+              "\n",
+              "        uint8_t raw_now = trigger_pressed ? 1 : 0;\n",
+              "        if (raw_now == raw_last)\n",
+              "        {\n",
+              "            if (stable_count < 2)\n",
+              "                stable_count++;\n",
+              "        }\n",
+              "        else\n",
+              "        {\n",
+              "            raw_last = raw_now;\n",
+              "            stable_count = 1;\n",
+              "        }\n",
+              "\n",
+              "        if (stable_count >= 2 && raw_last != stable_state)\n",
+              "        {\n",
+              "            stable_state = raw_last;\n",
+              "            send_to_trigger (stable_state ? SW_PRESSED : SW_RELEASED);\n",
+              "        }\n",
+              "\n",
+          ]
+          write_lines(p, L)
 
-              uint8_t raw_now = trigger_pressed ? 1 : 0;
-              if (raw_now == raw_last)
-              {
-                  if (stable_count < 2)
-                      stable_count++;
-              }
-              else
-              {
-                  raw_last = raw_now;
-                  stable_count = 1;
-              }
+          # Trigger state machine: first press starts immediately. Release/press
+          # edges independently pause/resume motor torque while the existing
+          # multi-click state machine keeps recognizing gestures.
+          p = "applications/trigger.c"
+          L = read_lines(p)
+          i = find_line(L, "SW_STATE old_state = state;")
+          L[i+1:i+1] = [
+              "\n",
+              "        // Motor output follows the debounced trigger immediately; click timing\n",
+              "        // continues independently in this state machine. Cruise is intentionally\n",
+              "        // exempt from release-to-pause so its hands-off behavior is preserved.\n",
+              "        if (event == SW_RELEASED && state != SWST_CRUISE)\n",
+              "            send_to_speed (SPEED_PAUSE);\n",
+              "        else if (event == SW_PRESSED)\n",
+              "            send_to_speed (SPEED_RESUME);\n",
+          ]
+          off = find_line(L, "case SWST_OFF:")
+          on = find_first(L, "case SWST_ON:", off + 1)
+          L[off:on] = [
+              "        case SWST_OFF:\n",
+              "            if (event == SW_PRESSED)\n",
+              "            {\n",
+              "                // Single-press start.\n",
+              "                state = SWST_ONE_ON;\n",
+              "                timeout = TIME_INFINITE;\n",
+              "                send_to_speed (SPEED_ON);\n",
+              "            }\n",
+              "            break;\n",
+          ]
+          write_lines(p, L)
 
-              if (stable_count >= 2 && raw_last != stable_state)
-              {
-                  stable_state = raw_last;
-                  send_to_trigger (stable_state ? SW_PRESSED : SW_RELEASED);
-              }"""
-          )
+          # Speed controller changes.
+          p = "applications/speed.c"
+          L = read_lines(p)
 
-          # ------------------------------------------------------------------
-          # Trigger state machine:
-          #  - first press from OFF starts immediately
-          #  - every debounced release pauses motor output immediately
-          #  - a re-press resumes output while click recognition continues
-          #  - cruise retains its intentional hands-off behavior
-          # ------------------------------------------------------------------
-          replace_once(
-              "applications/trigger.c",
-              """        TRIG_LOG(("TRIGGER State = %s, Event = 0x%x", sw_states[state], event));
-              SW_STATE old_state = state;
+          # Add paused motor state.
+          i = find_line(L, "MOTOR_START,		// test for obstruction")
+          L[i+1:i+1] = ["    MOTOR_PAUSED,\t\t// trigger released during click-recognition window\n"]
+          i = find_line(L, '{ "MOTOR_OFF", "MOTOR_ON", "MOTOR_START"};')
+          L[i] = '    { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START", "MOTOR_PAUSED"};\n'
 
-              switch (state)""",
-              """        TRIG_LOG(("TRIGGER State = %s, Event = 0x%x", sw_states[state], event));
-              SW_STATE old_state = state;
+          # Separate startup vs speed-change ramp rates.
+          i = find_line(L, "#define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running")
+          L[i+1:i+1] = [
+              "#define RUNNING_MAX_ERPM 100000 // normal running ERPM ceiling\n",
+              "\n",
+              "// $r is the startup ramp; speed-level changes use 2x $r.\n",
+              "static float ramp_multiplier = 1.0;\n",
+          ]
+          for j,x in enumerate(L):
+              if "const float delta = ((float) settings->ramping)" in x:
+                  L[j] = "    const float delta = (((float) settings->ramping) * ramp_multiplier) / (1000.0 / RAMPING_TIME_MS);\n"
+                  break
+          else:
+              raise SystemExit("ramping delta not found")
 
-              // Decouple motor output from the click-recognition timers.
-              // A release stops torque immediately after switch debounce, while the
-              // trigger state machine can still wait to see whether it was a click.
-              if (event == SW_RELEASED && state != SWST_CRUISE)
-                  send_to_speed (SPEED_PAUSE);
-              else if (event == SW_PRESSED)
-                  send_to_speed (SPEED_RESUME);
+          i = find_line(L, "MODE_OFF, MODE_RUN, MODE_START")
+          L[i] = "    MODE_OFF, MODE_RUN, MODE_START, MODE_PAUSE, MODE_RESUME\n"
 
-              switch (state)"""
-          )
-          replace_once(
-              "applications/trigger.c",
-              """        case SWST_OFF:
-                  if (event == SW_PRESSED)
-                  {
-                      state = SWST_GOING_ON;
-                      timeout = MS2ST(settings->trig_on_time);
-                  }
-                  break;""",
-              """        case SWST_OFF:
-                  if (event == SW_PRESSED)
-                  {
-                      // Single-press start.
-                      state = SWST_ONE_ON;
-                      timeout = TIME_INFINITE;
-                      send_to_speed (SPEED_ON);
-                  }
-                  break;"""
-          )
+          # Replace only the mode-selection body of adjust_speed.
+          fn = find_line(L, "static float adjust_speed (uint8_t user_setting, RUN_MODES mode)")
+          body = find_first(L, "if (mode == MODE_OFF)", fn + 1)
+          log_if = find_first(L, "#if(SPEED_LOG == 1)", body + 1)
+          L[body:log_if] = [
+              "    if (mode == MODE_OFF)\n",
+              "    {\n",
+              "        present_speed = 0.0;\n",
+              "        mc_interface_release_motor ();\n",
+              "        set_max_current(settings->limits[0]);\n",
+              "        return present_speed;\n",
+              "    }\n",
+              "    else if (mode == MODE_PAUSE)\n",
+              "    {\n",
+              "        // Stop torque immediately but retain commanded/ramped speed.\n",
+              "        mc_interface_release_motor ();\n",
+              "        return present_speed;\n",
+              "    }\n",
+              "    else if (mode == MODE_RESUME)\n",
+              "    {\n",
+              "        set_max_ERPM(RUNNING_MAX_ERPM);\n",
+              "        set_max_current(settings->limits[user_setting]);\n",
+              "        if ((conf->m_invert_direction) == 1)\n",
+              "            mc_interface_set_pid_speed (present_speed / 2);\n",
+              "        else\n",
+              "            mc_interface_set_pid_speed (present_speed);\n",
+              "        return present_speed;\n",
+              "    }\n",
+              "    else if (mode == MODE_START)\n",
+              "    {\n",
+              "        set_max_current(settings->guard_limit);\n",
+              "        present_speed = settings->guard_erpm;\n",
+              "        present_speed = limit_speed_by_battery(present_speed);\n",
+              "        set_max_ERPM(settings->guard_max_erpm);\n",
+              "\n",
+              "        if ((conf->m_invert_direction) == 1)\n",
+              "            mc_interface_set_pid_speed (present_speed / 2);\n",
+              "        else\n",
+              "            mc_interface_set_pid_speed (present_speed);\n",
+              "        return present_speed;\n",
+              "    }\n",
+              "    else // MODE_RUN\n",
+              "    {\n",
+              "        set_max_ERPM(RUNNING_MAX_ERPM);\n",
+              "        set_max_current(settings->limits[user_setting]);\n",
+              "        present_speed = ramping (present_speed, get_limited_speed(user_setting));\n",
+              "\n",
+              "        if ((conf->m_invert_direction) == 1)\n",
+              "            mc_interface_set_pid_speed (present_speed / 2);\n",
+              "        else\n",
+              "            mc_interface_set_pid_speed (present_speed);\n",
+              "    }\n",
+              "\n",
+          ]
+          i = find_line(L, 'const char *const mode_str[] = { "OFF", "RUN", "START" };')
+          L[i] = '        const char *const mode_str[] = { "OFF", "RUN", "START", "PAUSE", "RESUM" };\n'
 
-          # ------------------------------------------------------------------
-          # Speed state machine.
-          # ------------------------------------------------------------------
-          replace_once(
-              "applications/speed.c",
-              """    MOTOR_ON,			// motor running
-              MOTOR_START,		// test for obstruction
-              MOTOR_EOL""",
-              """    MOTOR_ON,			// motor running
-              MOTOR_START,		// test for obstruction
-              MOTOR_PAUSED,		// trigger released during click-recognition window
-              MOTOR_EOL"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """const char *const motor_states[] =
-              { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START"};""",
-              """const char *const motor_states[] =
-              { "MOTOR_OFF", "MOTOR_ON", "MOTOR_START", "MOTOR_PAUSED"};"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """#define RAMPING_TIME_MS 50.0 // mS - 20 times per second
-          #define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running""",
-              """#define RAMPING_TIME_MS 50.0 // mS - 20 times per second
-          #define CHECK_BATTERY_PERIOD_MS 5000 // check the battery every 5 seconds while running
-          #define RUNNING_MAX_ERPM 100000 // MAX ERPM when running is large and unrestrained.
+          # Track whether a pause happened during optional safe-start mode.
+          i = find_line(L, "uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed")
+          L[i+1:i+1] = ["    bool paused_from_start = false;\n"]
 
-          // $r remains the startup ramp. Normal speed-level changes use 2x $r.
-          static float ramp_multiplier = 1.0;"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """    const float delta = ((float) settings->ramping) / (1000.0 / RAMPING_TIME_MS);""",
-              """    const float delta = (((float) settings->ramping) * ramp_multiplier) / (1000.0 / RAMPING_TIME_MS);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """typedef enum _run_modes
-          {
-              MODE_OFF, MODE_RUN, MODE_START
-          } RUN_MODES;""",
-              """typedef enum _run_modes
-          {
-              MODE_OFF, MODE_RUN, MODE_START, MODE_PAUSE, MODE_RESUME
-          } RUN_MODES;"""
-          )
+          motor_off = find_line(L, "case MOTOR_OFF:")
+          motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
+          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
 
-          old = """    if (mode == MODE_OFF)
-              {
-                  present_speed = 0.0;
-                  mc_interface_release_motor ();
-                  set_max_current(settings->limits[0]);
-                  return present_speed;
-              }
-              else if (mode == MODE_START)
-              {
-                  set_max_current(settings->guard_limit);
-                  present_speed = settings->guard_erpm;
-                  present_speed = limit_speed_by_battery(present_speed);
-                  set_max_ERPM(settings->guard_max_erpm);
-          		
-          		if ((conf->m_invert_direction) == 1) //reverse have speed
-          		{
-          			mc_interface_set_pid_speed ((present_speed / 2));
-          		}
-          		else
-          			mc_interface_set_pid_speed (present_speed);
-                  return present_speed;
-              }
-              else // mode == MODE_RUN
-              {
-                  #define RUNNING_MAX_ERPM  100000 // MAX ERPM when running is just large and unrestrained.
-                  set_max_ERPM(RUNNING_MAX_ERPM);
-                  set_max_current(settings->limits[user_setting]);
+          # Normal startup uses $r.
+          i = find_first(L, "case SPEED_ON:", motor_off + 1)
+          L[i+1:i+1] = [
+              "                ramp_multiplier = 1.0;\n",
+              "                paused_from_start = false;\n",
+          ]
+          i = find_first(L, "case JUMP_SPEED_START: //new jump speed", motor_off + 1)
+          if i < motor_on:
+              L[i+1:i+1] = ["                ramp_multiplier = 1.0;\n"]
 
-                  // ramp from the present speed toward the desired speed from user setting
-                  present_speed = ramping (present_speed, get_limited_speed(user_setting));
+          # Re-find state boundaries after insertions.
+          motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
+          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
 
-                  if ((conf->m_invert_direction) == 1) //reverse half speed
-          		{
-          			mc_interface_set_pid_speed ((present_speed / 2));
-          		}
-          		else
-          			mc_interface_set_pid_speed (present_speed);
-              }
+          # Immediate pause in normal running state.
+          i = find_first(L, "case SPEED_OFF:", motor_on + 1)
+          if i >= motor_start:
+              raise SystemExit("MOTOR_ON SPEED_OFF boundary error")
+          L[i:i] = [
+              "            case SPEED_PAUSE:\n",
+              "                state = MOTOR_PAUSED;\n",
+              "                paused_from_start = false;\n",
+              "                set_timeout(TIME_INFINITE);\n",
+              "                adjust_speed (user_speed, MODE_PAUSE);\n",
+              "                break;\n",
+          ]
 
-              #if(SPEED_LOG == 1)
-                  const char *const mode_str[] = { "OFF", "RUN", "START" };
-              #endif"""
-          new = """    if (mode == MODE_OFF)
-              {
-                  present_speed = 0.0;
-                  mc_interface_release_motor ();
-                  set_max_current(settings->limits[0]);
-                  return present_speed;
-              }
-              else if (mode == MODE_PAUSE)
-              {
-                  // Release torque but retain the commanded/ramped speed in memory.
-                  mc_interface_release_motor ();
-                  return present_speed;
-              }
-              else if (mode == MODE_RESUME)
-              {
-                  // Resume at the retained commanded speed. If a ramp was incomplete,
-                  // the normal 50 ms ramp timer will continue it after resumption.
-                  set_max_ERPM(RUNNING_MAX_ERPM);
-                  set_max_current(settings->limits[user_setting]);
-                  if ((conf->m_invert_direction) == 1)
-                      mc_interface_set_pid_speed (present_speed / 2);
-                  else
-                      mc_interface_set_pid_speed (present_speed);
-                  return present_speed;
-              }
-              else if (mode == MODE_START)
-              {
-                  set_max_current(settings->guard_limit);
-                  present_speed = settings->guard_erpm;
-                  present_speed = limit_speed_by_battery(present_speed);
-                  set_max_ERPM(settings->guard_max_erpm);
-          		
-          		if ((conf->m_invert_direction) == 1) //reverse have speed
-          		{
-          			mc_interface_set_pid_speed ((present_speed / 2));
-          		}
-          		else
-          			mc_interface_set_pid_speed (present_speed);
-                  return present_speed;
-              }
-              else // mode == MODE_RUN
-              {
-                  set_max_ERPM(RUNNING_MAX_ERPM);
-                  set_max_current(settings->limits[user_setting]);
+          # Speed changes use 2x $r.
+          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
+          for case_name, anchor in [
+              ("case SPEED_UP:", "increase (&user_speed);"),
+              ("case SPEED_DOWN:", "decrease (&user_speed);"),
+              ("case JUMP_SPEED: //new jump speed", "user_speed = settings->jump_speed -1;"),
+          ]:
+              ci = find_first(L, case_name, motor_on + 1)
+              if ci >= motor_start:
+                  raise SystemExit(f"{case_name} escaped MOTOR_ON")
+              ai = find_first(L, anchor, ci + 1)
+              L[ai+1:ai+1] = ["                ramp_multiplier = 2.0;\n"]
 
-                  // ramp from the present speed toward the desired speed from user setting
-                  present_speed = ramping (present_speed, get_limited_speed(user_setting));
+          # Safe-start release also removes torque, but remembers that resume must
+          # return to the safety check rather than bypassing it.
+          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
+          i = find_first(L, "case SPEED_OFF:		// user gave up and turned motor off.", motor_start + 1)
+          L[i:i] = [
+              "            case SPEED_PAUSE:\n",
+              "                state = MOTOR_PAUSED;\n",
+              "                paused_from_start = true;\n",
+              "                set_timeout(TIME_INFINITE);\n",
+              "                adjust_speed (user_speed, MODE_PAUSE);\n",
+              "                send_to_ready (READY_OFF);\n",
+              "                break;\n",
+          ]
 
-                  if ((conf->m_invert_direction) == 1) //reverse half speed
-          		{
-          			mc_interface_set_pid_speed ((present_speed / 2));
-          		}
-          		else
-          			mc_interface_set_pid_speed (present_speed);
-              }
+          # When safe-start succeeds, switch back to startup ramp semantics.
+          i = find_first(L, "case SPEED_READY:   // READY thread approved start conditions", motor_start + 1)
+          state_line = find_first(L, "state = MOTOR_ON;", i + 1)
+          L[state_line+1:state_line+1] = [
+              "                paused_from_start = false;\n",
+              "                ramp_multiplier = 1.0;\n",
+          ]
 
-              #if(SPEED_LOG == 1)
-                  const char *const mode_str[] = { "OFF", "RUN", "START", "PAUSE", "RESUM" };
-              #endif"""
-          replace_once("applications/speed.c", old, new)
-
-          replace_once(
-              "applications/speed.c",
-              """    uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed
-
-              for (;;)""",
-              """    uint8_t user_speed = DEFAULT_SPEED; // the index to the speed setting. Always start out in the default speed
-              bool paused_from_start = false;
-
-              for (;;)"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """            case SPEED_ON:
-                      send_to_display (DISP_ON_TRIGGER);""",
-              """            case SPEED_ON:
-                      ramp_multiplier = 1.0;
-                      paused_from_start = false;
-                      send_to_display (DISP_ON_TRIGGER);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """			case JUMP_SPEED_START: //new jump speed
-          				state = MOTOR_ON;""",
-              """			case JUMP_SPEED_START: //new jump speed
-                          ramp_multiplier = 1.0;
-          				state = MOTOR_ON;"""
-          )
-
-          replace_once(
-              "applications/speed.c",
-              """        case MOTOR_ON:
-                  switch (event)
-                  {
-                  case SPEED_OFF:""",
-              """        case MOTOR_ON:
-                  switch (event)
-                  {
-                  case SPEED_PAUSE:
-                      state = MOTOR_PAUSED;
-                      paused_from_start = false;
-                      set_timeout(TIME_INFINITE);
-                      adjust_speed (user_speed, MODE_PAUSE);
-                      break;
-                  case SPEED_OFF:"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """            case SPEED_UP:
-                      increase (&user_speed);
-                      adjust_speed (user_speed, MODE_RUN);""",
-              """            case SPEED_UP:
-                      increase (&user_speed);
-                      ramp_multiplier = 2.0;
-                      adjust_speed (user_speed, MODE_RUN);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """            case SPEED_DOWN:
-                      decrease (&user_speed);
-                      adjust_speed (user_speed, MODE_RUN);""",
-              """            case SPEED_DOWN:
-                      decrease (&user_speed);
-                      ramp_multiplier = 2.0;
-                      adjust_speed (user_speed, MODE_RUN);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """            case JUMP_SPEED: //new jump speed
-                      user_speed = settings->jump_speed -1;
-                      adjust_speed (user_speed, MODE_RUN);""",
-              """            case JUMP_SPEED: //new jump speed
-                      user_speed = settings->jump_speed -1;
-                      ramp_multiplier = 2.0;
-                      adjust_speed (user_speed, MODE_RUN);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """            case SPEED_READY:   // READY thread approved start conditions
-                      state = MOTOR_ON;
-                      adjust_speed (user_speed, MODE_RUN);""",
-              """            case SPEED_READY:   // READY thread approved start conditions
-                      state = MOTOR_ON;
-                      paused_from_start = false;
-                      ramp_multiplier = 1.0;
-                      adjust_speed (user_speed, MODE_RUN);"""
-          )
-          replace_once(
-              "applications/speed.c",
-              """        case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions
-                  switch (event)
-                  {
-                  case SPEED_OFF:		// user gave up and turned motor off.""",
-              """        case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions
-                  switch (event)
-                  {
-                  case SPEED_PAUSE:
-                      // Preserve safe-start semantics if this mode is ever re-enabled.
-                      state = MOTOR_PAUSED;
-                      paused_from_start = true;
-                      set_timeout(TIME_INFINITE);
-                      adjust_speed (user_speed, MODE_PAUSE);
-                      send_to_ready (READY_OFF);
-                      break;
-                  case SPEED_OFF:		// user gave up and turned motor off."""
-          )
-
-          replace_once(
-              "applications/speed.c",
-              """            default:
-                      break;
-                  }
-                  break;
-              default:
-                  break;
-              }
-
-              if (old_state != state)""",
-              """            default:
-                      break;
-                  }
-                  break;
-
-              case MOTOR_PAUSED:
-                  switch (event)
-                  {
-                  case SPEED_RESUME:
-                      if (paused_from_start && settings->use_safety)
-                      {
-                          state = MOTOR_START;
-                          set_timeout(TIME_INFINITE);
-                          send_to_ready (READY_ON);
-                      }
-                      else
-                      {
-                          state = MOTOR_ON;
-                          present_speed = adjust_speed (user_speed, MODE_RESUME);
-                          send_to_display (DISP_ON_TRIGGER);
-                          send_to_display (DISP_SPEED_1 + user_speed);
-
-                          // Continue an interrupted ramp immediately. Otherwise,
-                          // return to the normal periodic battery-check cadence.
-                          if (present_speed == get_limited_speed(user_speed))
-                              set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));
-                          else
-                              set_timeout(MS2ST(RAMPING_TIME_MS));
-                      }
-                      break;
-
-                  case SPEED_OFF:
-                      state = MOTOR_OFF;
-                      paused_from_start = false;
-                      send_to_display (DISP_OFF_TRIGGER);
-                      set_timeout(MS2ST(settings->migrate_rate));
-                      adjust_speed (user_speed, MODE_OFF);
-                      break;
-
-                  case SPEED_PAUSE:
-                      // Already paused.
-                      break;
-
-                  default:
-                      break;
-                  }
-                  break;
-
-              default:
-                  break;
-              }
-
-              if (old_state != state)"""
-          )
-
-          # Ensure normal start explicitly selects startup ramp before first step.
-          replace_once(
-              "applications/speed.c",
-              """                    // start ramping up to the first speed.
-                      adjust_speed (user_speed, MODE_RUN);""",
-              """                    // start ramping up to the first speed using $r.
-                      ramp_multiplier = 1.0;
-                      adjust_speed (user_speed, MODE_RUN);"""
-          )
+          # Insert paused state before the outer switch default.
+          motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
+          inner_default = find_first(L, "default:", motor_start + 1)
+          outer_default = find_first(L, "default:", inner_default + 1)
+          paused_block = [
+              "        case MOTOR_PAUSED:\n",
+              "            switch (event)\n",
+              "            {\n",
+              "            case SPEED_RESUME:\n",
+              "                if (paused_from_start && settings->use_safety)\n",
+              "                {\n",
+              "                    state = MOTOR_START;\n",
+              "                    set_timeout(TIME_INFINITE);\n",
+              "                    send_to_ready (READY_ON);\n",
+              "                }\n",
+              "                else\n",
+              "                {\n",
+              "                    state = MOTOR_ON;\n",
+              "                    present_speed = adjust_speed (user_speed, MODE_RESUME);\n",
+              "                    send_to_display (DISP_ON_TRIGGER);\n",
+              "                    send_to_display (DISP_SPEED_1 + user_speed);\n",
+              "                    if (present_speed == get_limited_speed(user_speed))\n",
+              "                        set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));\n",
+              "                    else\n",
+              "                        set_timeout(MS2ST(RAMPING_TIME_MS));\n",
+              "                }\n",
+              "                break;\n",
+              "\n",
+              "            case SPEED_OFF:\n",
+              "                state = MOTOR_OFF;\n",
+              "                paused_from_start = false;\n",
+              "                send_to_display (DISP_OFF_TRIGGER);\n",
+              "                set_timeout(MS2ST(settings->migrate_rate));\n",
+              "                adjust_speed (user_speed, MODE_OFF);\n",
+              "                break;\n",
+              "\n",
+              "            case SPEED_PAUSE:\n",
+              "                break;\n",
+              "\n",
+              "            default:\n",
+              "                break;\n",
+              "            }\n",
+              "            break;\n",
+          ]
+          L[outer_default:outer_default] = paused_block
+          write_lines(p, L)
 
           print("OPT4 source modifications applied successfully.")
           PY
