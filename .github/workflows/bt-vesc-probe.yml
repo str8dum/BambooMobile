@@ -131,14 +131,15 @@ jobs:
 
               MESSAGE_EOL,"""
           )
-          replace_once(
-              "applications/msgs.h",
-              """    "BATT_1_TOOLOW", "BATT_2_TOOLOW", \
-          }""",
-              """    "BATT_1_TOOLOW", "BATT_2_TOOLOW", \
-              "SPEED_PAUSE", "SPEED_RESUME", \
-          }"""
-          )
+          msgp = Path("applications/msgs.h")
+          ms = msgp.read_text()
+          bs = chr(92)
+          old = '    "BATT_1_TOOLOW", "BATT_2_TOOLOW", ' + bs + '\n}'
+          new = ('    "BATT_1_TOOLOW", "BATT_2_TOOLOW", ' + bs + '\n'
+                 '    "SPEED_PAUSE", "SPEED_RESUME", ' + bs + '\n}')
+          if ms.count(old) != 1:
+              raise SystemExit(f"applications/msgs.h: expected one message-text tail, got {ms.count(old)}")
+          msgp.write_text(ms.replace(old, new, 1))
 
           # ------------------------------------------------------------------
           # Two consecutive 40 Hz samples are required before reporting an edge.
