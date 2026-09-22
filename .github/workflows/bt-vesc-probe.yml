@@ -440,7 +440,8 @@ jobs:
           cd BT_VESC
           grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT5' applications/app_version.h
           grep -F 'SPEED_PAUSE' applications/msgs.h
-          grep -F 'SPEED_RESUME' applications/msgs.h\n          grep -F 'case SPEED_RESUME:' applications/speed.c
+          grep -F 'SPEED_RESUME' applications/msgs.h
+          grep -F 'case SPEED_RESUME:' applications/speed.c
           grep -F 'ramp_multiplier = 2.0' applications/speed.c
           grep -F 'stable_count >= 2' applications/app_sikorski.c
           grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
