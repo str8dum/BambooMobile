@@ -1,4 +1,4 @@
-name: BT VESC GEORGE OPT4 build
+name: BT VESC GEORGE OPT5 build
 
 on:
   push:
@@ -50,7 +50,7 @@ jobs:
           cmp -s build/BLDC_4_BT_VESC.bin /tmp/george/BLDC_4_BT_VESC.bin
           echo "Baseline reproduction: EXACT MATCH"
 
-      - name: Apply OPT4 source modifications
+      - name: Apply OPT5 source modifications
         shell: bash
         run: |
           set -euxo pipefail
@@ -87,7 +87,7 @@ jobs:
           replace_text_once(
               "applications/app_version.h",
               '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4"',
-              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT4"'
+              '#define APP_VERSION "BT_VESC VERSION 2.3 GEORGE 0.4 OPT5"'
           )
 
           # Compile the user's current known-good BT_VESC tuning as defaults so
@@ -323,16 +323,26 @@ jobs:
           motor_on = find_first(L, "case MOTOR_ON:", motor_off + 1)
           motor_start = find_first(L, "case MOTOR_START: // wait here until it is indicated that we are running in water with no obstructions", motor_on + 1)
 
-          # Immediate pause in normal running state.
+          # Immediate torque pause in normal running state. IMPORTANT: do not leave\n          # MOTOR_ON here; otherwise the later SPEED_UP/SPEED_DOWN gesture event is\n          # interpreted while paused and gets lost.
           i = find_first(L, "case SPEED_OFF:", motor_on + 1)
           if i >= motor_start:
               raise SystemExit("MOTOR_ON SPEED_OFF boundary error")
           L[i:i] = [
               "            case SPEED_PAUSE:\n",
-              "                state = MOTOR_PAUSED;\n",
-              "                paused_from_start = false;\n",
+              "                // Physical trigger is up, but this is not yet a logical stop.\n",
+              "                // Keep MOTOR_ON so the existing click state machine can still\n",
+              "                // deliver SPEED_UP/SPEED_DOWN if the trigger is re-pressed.\n",
               "                set_timeout(TIME_INFINITE);\n",
               "                adjust_speed (user_speed, MODE_PAUSE);\n",
+              "                break;\n",
+              "            case SPEED_RESUME:\n",
+              "                // Re-press inside the click window: restore torque at the retained\n",
+              "                // speed without resetting user_speed or starting migration.\n",
+              "                present_speed = adjust_speed (user_speed, MODE_RESUME);\n",
+              "                if (present_speed == get_limited_speed(user_speed))\n",
+              "                    set_timeout(MS2ST(CHECK_BATTERY_PERIOD_MS));\n",
+              "                else\n",
+              "                    set_timeout(MS2ST(RAMPING_TIME_MS));\n",
               "                break;\n",
           ]
 
@@ -417,20 +427,20 @@ jobs:
           L[outer_default:outer_default] = paused_block
           write_lines(p, L)
 
-          print("OPT4 source modifications applied successfully.")
+          print("OPT5 source modifications applied successfully.")
           PY
 
           git diff --check
-          git diff > ../BT_VESC_GEORGE04_OPT4_SOURCE.diff
+          git diff > ../BT_VESC_GEORGE04_OPT5_SOURCE.diff
 
       - name: Static source assertions
         shell: bash
         run: |
           set -euxo pipefail
           cd BT_VESC
-          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT4' applications/app_version.h
+          grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT5' applications/app_version.h
           grep -F 'SPEED_PAUSE' applications/msgs.h
-          grep -F 'SPEED_RESUME' applications/msgs.h
+          grep -F 'SPEED_RESUME' applications/msgs.h\n          grep -F 'case SPEED_RESUME:' applications/speed.c
           grep -F 'ramp_multiplier = 2.0' applications/speed.c
           grep -F 'stable_count >= 2' applications/app_sikorski.c
           grep -F 'send_to_speed (SPEED_ON);' applications/trigger.c
@@ -440,7 +450,7 @@ jobs:
           grep -F '#define CRUISE 1' applications/defaults.h
           grep -F '#define LOW_MIGRATE 1' applications/defaults.h
 
-      - name: Compile OPT4 HW60 firmware
+      - name: Compile OPT5 HW60 firmware
         shell: bash
         run: |
           set -euxo pipefail
@@ -448,18 +458,18 @@ jobs:
           cd BT_VESC
           make clean
           make -j2
-          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
+          cp build/BLDC_4_BT_VESC.bin ../BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
           cd ..
-          echo '=== FINAL OPT4 ==='
-          sha256sum BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
-          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
-          strings BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT4'
+          echo '=== FINAL OPT5 ==='
+          sha256sum BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
+          stat -c '%n %s bytes' BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
+          strings BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin | grep -F 'BT_VESC VERSION 2.3 GEORGE 0.4 OPT5'
 
       - name: Create build notes
         shell: bash
         run: |
-          cat > BT_VESC_GEORGE04_OPT4_BUILD_NOTES.txt <<'EOF'
-          BT_VESC 2.3 GEORGE 0.4 OPT4 - HW60
+          cat > BT_VESC_GEORGE04_OPT5_BUILD_NOTES.txt <<'EOF'
+          BT_VESC 2.3 GEORGE 0.4 OPT5 - HW60
           
           Base source: bwoodill/BT_VESC branch v2.3_GEORGE_0.4
           Base official binary SHA-256:
@@ -474,7 +484,7 @@ jobs:
           Clean source compiled with the exact toolchain reproduced the official
           393,208-byte GEORGE 0.4 release binary byte-for-byte before modifications.
           
-          OPT4 changes:
+          OPT5 changes:
           1. Single-press start retained.
           2. Trigger release pauses motor torque after 2-sample debounce while click
              recognition continues. True stop occurs only after the gesture window.
@@ -489,9 +499,9 @@ jobs:
       - name: Upload final firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bt-vesc-george04-opt4
+          name: bt-vesc-george04-opt5
           path: |
-            BT_VESC_2.3_GEORGE0.4_OPT4_HW60.bin
-            BT_VESC_GEORGE04_OPT4_SOURCE.diff
-            BT_VESC_GEORGE04_OPT4_BUILD_NOTES.txt
+            BT_VESC_2.3_GEORGE0.4_OPT5_HW60.bin
+            BT_VESC_GEORGE04_OPT5_SOURCE.diff
+            BT_VESC_GEORGE04_OPT5_BUILD_NOTES.txt
           if-no-files-found: error
