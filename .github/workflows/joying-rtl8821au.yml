@@ -42,10 +42,9 @@ jobs:
           scripts/config --enable USB
           scripts/config --enable USB_SUPPORT
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vmlinux modules_prepare
+          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
           echo "UTS=$(cat include/generated/utsrelease.h)"
           grep -E 'CONFIG_(SMP|PREEMPT|MODULES|MODULE_UNLOAD|MODVERSIONS|CFG80211|USB)=' .config > ../kernel-config-key.txt
-          cp Module.symvers ../Module.symvers
 
       - name: Build Realtek 88XXau module
         run: |
@@ -53,7 +52,7 @@ jobs:
           cd rtl8812au
           sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
           sed -i 's/^CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/' Makefile
-          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC="$GITHUB_WORKSPACE/linux-4.14.117" KVER=4.14.117-perf
+          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KBUILD_MODPOST_WARN=1 KSRC="$GITHUB_WORKSPACE/linux-4.14.117" KVER=4.14.117-perf
           test -f 88XXau.ko
           aarch64-linux-gnu-strip --strip-debug 88XXau.ko
           cp 88XXau.ko "$GITHUB_WORKSPACE/88XXau.raw.ko"
@@ -68,7 +67,6 @@ jobs:
           name: joying-rtl8821au-raw
           path: |
             88XXau.raw.ko
-            Module.symvers
             kernel-config-key.txt
             modinfo.txt
             symbols.txt
