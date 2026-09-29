@@ -1,0 +1,72 @@
+name: Joying RTL8821AU build
+
+on:
+  push:
+    branches:
+      - joying-usb-wifi-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev xz-utils wget git python3
+
+      - name: Download Linux 4.14.117
+        run: |
+          wget -q https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.117.tar.xz
+          tar -xf linux-4.14.117.tar.xz
+          cd linux-4.14.117
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          scripts/config --set-str LOCALVERSION "-perf"
+          scripts/config --enable SMP
+          scripts/config --enable PREEMPT
+          scripts/config --enable MODULES
+          scripts/config --enable MODULE_UNLOAD
+          scripts/config --enable MODVERSIONS
+          scripts/config --disable MODULE_SIG_ALL
+          scripts/config --enable CFG80211
+          scripts/config --enable WIRELESS
+          scripts/config --enable WLAN
+          scripts/config --enable USB
+          scripts/config --enable USB_SUPPORT
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vmlinux modules_prepare
+          echo "UTS=$(cat include/generated/utsrelease.h)"
+          grep -E 'CONFIG_(SMP|PREEMPT|MODULES|MODULE_UNLOAD|MODVERSIONS|CFG80211|USB)=' .config > ../kernel-config-key.txt
+          cp Module.symvers ../Module.symvers
+
+      - name: Build Realtek 88XXau module
+        run: |
+          git clone --depth 1 --branch v5.2.20 https://github.com/aircrack-ng/rtl8812au.git
+          cd rtl8812au
+          sed -i 's/^CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' Makefile
+          sed -i 's/^CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/' Makefile
+          make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC="$GITHUB_WORKSPACE/linux-4.14.117" KVER=4.14.117-perf
+          test -f 88XXau.ko
+          aarch64-linux-gnu-strip --strip-debug 88XXau.ko
+          cp 88XXau.ko "$GITHUB_WORKSPACE/88XXau.raw.ko"
+          aarch64-linux-gnu-readelf -p .modinfo 88XXau.ko > "$GITHUB_WORKSPACE/modinfo.txt" || true
+          aarch64-linux-gnu-readelf -Ws 88XXau.ko > "$GITHUB_WORKSPACE/symbols.txt" || true
+          aarch64-linux-gnu-readelf -x __versions 88XXau.ko > "$GITHUB_WORKSPACE/versions.txt" || true
+          sha256sum 88XXau.ko > "$GITHUB_WORKSPACE/sha256.txt"
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: joying-rtl8821au-raw
+          path: |
+            88XXau.raw.ko
+            Module.symvers
+            kernel-config-key.txt
+            modinfo.txt
+            symbols.txt
+            versions.txt
+            sha256.txt
