@@ -24,6 +24,10 @@ jobs:
           wget -q https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.117.tar.xz
           tar -xf linux-4.14.117.tar.xz
           cd linux-4.14.117
+          # Linux 4.14 predates GCC 10's -fno-common default.
+          # Remove the duplicate flex-side yylloc definition before host DTC is built.
+          sed -i '/YYLTYPE yylloc;/d' scripts/dtc/dtc-lexer.l
+          sed -i '/YYLTYPE yylloc;/d' scripts/dtc/dtc-lexer.lex.c_shipped
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           scripts/config --set-str LOCALVERSION "-perf"
           scripts/config --enable SMP
