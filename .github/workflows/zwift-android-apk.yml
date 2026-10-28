@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.3.2 APK
+name: KICKR-SIM v0.3.3 APK
 on:
   push:
-    branches: [build/zwift-ridesim-v032]
+    branches: [build/zwift-ridesim-v033]
   workflow_dispatch:
 jobs:
   android:
@@ -30,6 +30,11 @@ jobs:
           git apply --verbose --directory=ridesim ride-v032.patch
           grep -q "powerControl.addView" ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
           grep -q "versionName '0.3.2'" ridesim/app/build.gradle
+          echo "9df62e1e74670f740790fa1def854ab5688305949fb05a9ed8d09ff11696b48c  ride-v033-icon-overlay.b64" | sha256sum -c -
+          base64 -d ride-v033-icon-overlay.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" | tar -xf - -C ridesim
+          grep -q 'android:icon="@mipmap/ic_launcher"' ridesim/app/src/main/AndroidManifest.xml
+          grep -q "versionName '0.3.3'" ridesim/app/build.gradle
+          test -s ridesim/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -54,6 +59,6 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.3.2-debug-APK
+          name: KICKR-SIM-v0.3.3-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
