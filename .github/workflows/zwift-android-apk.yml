@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.3.3 APK
+name: KICKR-SIM v0.4.0 Bridge APK
 on:
   push:
-    branches: [build/zwift-ridesim-v033]
+    branches: [build/zwift-ridesim-v040]
   workflow_dispatch:
 jobs:
   android:
@@ -35,6 +35,13 @@ jobs:
           grep -q 'android:icon="@mipmap/ic_launcher"' ridesim/app/src/main/AndroidManifest.xml
           grep -q "versionName '0.3.3'" ridesim/app/build.gradle
           test -s ridesim/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          echo "868c4becc5f1849e64477bded3c7e40ec4c89e38b907ab2b44f24776bf99952c  ride-v040-patch.b64" | sha256sum -c -
+          base64 -d ride-v040-patch.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" > ride-v040.patch
+          git apply --check --directory=ridesim ride-v040.patch
+          git apply --verbose --directory=ridesim ride-v040.patch
+          grep -q "versionName '0.4.0'" ridesim/app/build.gradle
+          grep -q "bridgeMultiplierPercent" ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
+          test -f ridesim/app/src/main/java/com/ridesim/zwift/KickrClient.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -53,12 +60,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/selftest
-          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/BridgeSelfTest.java
+          java -cp build/selftest BridgeSelfTest
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.3.3-debug-APK
+          name: KICKR-SIM-v0.4.0-Bridge-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
