@@ -18,13 +18,10 @@ jobs:
           base64 -d ridesim-source.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" | tar -xf - -C ridesim
           echo "1e65e2f56625ee0da245676c4173582fb0d2f3f2773fd62ca927752e5fdeec42  ride-v031-patch.b64" | sha256sum -c -
           base64 -d ride-v031-patch.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" > ride-v031.patch
-          (cd ridesim && git apply --check ../ride-v031.patch && git apply ../ride-v031.patch)
-          # git apply from inside a Git checkout may place an added file at the
-          # repository root while modified files resolve inside ridesim/.
-          if [ ! -f ridesim/app/src/main/java/com/ridesim/zwift/FtmsPackets.java ] && [ -f app/src/main/java/com/ridesim/zwift/FtmsPackets.java ]; then
-            cp app/src/main/java/com/ridesim/zwift/FtmsPackets.java ridesim/app/src/main/java/com/ridesim/zwift/FtmsPackets.java
-          fi
-          find . -name FtmsPackets.java
+          # GitHub checkout is a repository, so apply the patch from the root
+          # with an explicit directory prefix (otherwise git silently skips it).
+          git apply --check --directory=ridesim ride-v031.patch
+          git apply --verbose --directory=ridesim ride-v031.patch
           test -f ridesim/app/src/main/java/com/ridesim/zwift/FtmsPackets.java
           grep -q cadencePowerGain ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
       - uses: actions/setup-java@v4
