@@ -1,20 +1,24 @@
-name: RideSim Android APK
+name: KICKR-SIM v0.3.1 APK
 on:
   push:
-    branches: [build/zwift-ridesim-v021]
+    branches: [build/zwift-ridesim-v031]
   workflow_dispatch:
 jobs:
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore RideSim sources
+      - name: Restore working v0.2.1 base and apply v0.3.1 updates
+        shell: bash
         run: |
           set -euo pipefail
           cat chunk-0*.txt > ridesim-source.b64
           echo "75be623807a7789781627f4e79ab3fc514002d0db9f698b2b8136c262939b07a  ridesim-source.b64" | sha256sum -c -
           mkdir ridesim
           base64 -d ridesim-source.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" | tar -xf - -C ridesim
+          echo "1e65e2f56625ee0da245676c4173582fb0d2f3f2773fd62ca927752e5fdeec42  ride-v031-patch.b64" | sha256sum -c -
+          base64 -d ride-v031-patch.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" > ride-v031.patch
+          (cd ridesim && git apply --check ../ride-v031.patch && git apply ../ride-v031.patch)
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -23,16 +27,22 @@ jobs:
         with:
           gradle-version: '8.10.2'
       - name: Install Android SDK platform
+        shell: bash
         run: |
           set -euo pipefail
           TOOL="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
-          echo "Using $TOOL"
           "$TOOL" 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Compile APK
+      - name: Compile pure-Java simulation
+        working-directory: ridesim
+        shell: bash
+        run: |
+          mkdir -p build/selftest
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java
+      - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-APK
+          name: KICKR-SIM-v0.3.1-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
