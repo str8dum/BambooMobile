@@ -8,10 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore source
-        if: ${{ hashFiles('ridesim-source.b64') != '' }}
+      - name: Restore RideSim sources
         run: |
+          set -euo pipefail
+          cat chunk-0*.txt > ridesim-source.b64
+          echo "75be623807a7789781627f4e79ab3fc514002d0db9f698b2b8136c262939b07a  ridesim-source.b64" | sha256sum -c -
           base64 -d ridesim-source.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" | tar -xf -
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -21,13 +25,10 @@ jobs:
         with:
           gradle-version: '8.10.2'
       - name: Install Android platform
-        if: ${{ hashFiles('ridesim-source.b64') != '' }}
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Build APK
-        if: ${{ hashFiles('ridesim-source.b64') != '' }}
+      - name: Compile Debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
-        if: ${{ hashFiles('ridesim-source.b64') != '' }}
         with:
           name: KICKR-SIM-APK
           path: app/build/outputs/apk/debug/app-debug.apk
