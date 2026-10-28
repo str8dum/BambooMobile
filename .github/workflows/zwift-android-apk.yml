@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.5.0 WiFi Grade APK
+name: KICKR-SIM v0.5.1 Permanent Updates
 on:
   push:
-    branches: [build/zwift-ridesim-v050]
+    branches: [build/zwift-ridesim-v051]
   workflow_dispatch:
 jobs:
   android:
@@ -48,6 +48,12 @@ jobs:
           git apply --verbose --directory=ridesim ride-v050.patch
           test -f ridesim/app/src/main/java/com/ridesim/zwift/ZwiftGradeClient.java
           grep -q "versionName '0.5.0'" ridesim/app/build.gradle
+          echo "018daa9de1012597a12b3710b8aa81a27743f8b96e4b9e3527455d42f902d67d  ride-v051-signing-update.patch.b64" | sha256sum -c -
+          base64 -d ride-v051-signing-update.patch.b64 | gzip -dc > ride-v051.patch
+          git apply --check --directory=ridesim ride-v051.patch
+          git apply --verbose --directory=ridesim ride-v051.patch
+          grep -q "versionName '0.5.1'" ridesim/app/build.gradle
+          grep -q "versionCode 10" ridesim/app/build.gradle
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -67,11 +73,34 @@ jobs:
         run: |
           mkdir -p build/selftest
           javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java
-      - name: Build installable Android APK
+      - name: Smoke test Android app compilation
         working-directory: ridesim
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Sign using permanent KICKR-SIM signing key
+        shell: bash
+        env:
+          KICKR_SIGNING_BUNDLE: ${{ secrets.KICKR_SIGNING_BUNDLE }}
+        working-directory: ridesim
+        run: |
+          python3 - <<'PY'
+          import os, json, base64, subprocess, pathlib, sys
+          encoded = os.environ.get('KICKR_SIGNING_BUNDLE', '')
+          if not encoded:
+              sys.exit('Missing KICKR_SIGNING_BUNDLE GitHub Actions secret. Set it under Settings -> Secrets and variables -> Actions.')
+          bundle = json.loads(base64.b64decode(encoded))
+          key_path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'kickrsim-permanent-signing.p12'
+          key_path.write_bytes(base64.b64decode(bundle['keystore']))
+          key_path.chmod(0o600)
+          env = dict(os.environ)
+          env.pop('KICKR_SIGNING_BUNDLE', None)
+          env['KICKR_KEYSTORE_PATH'] = str(key_path)
+          env['KICKR_KEYSTORE_PASSWORD'] = bundle['password']
+          subprocess.run(['gradle','--no-daemon',':app:assembleRelease'], env=env, check=True)
+          PY
+          test -s app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.5.0-WiFiGrade-debug-APK
-          path: ridesim/app/build/outputs/apk/debug/app-debug.apk
+          name: KICKR-SIM-v0.5.1-PERMANENT-APK
+          path: ridesim/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
