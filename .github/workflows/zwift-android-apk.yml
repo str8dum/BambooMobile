@@ -1,14 +1,14 @@
-name: KICKR-SIM v0.3.1 APK
+name: KICKR-SIM v0.3.2 APK
 on:
   push:
-    branches: [build/zwift-ridesim-v031]
+    branches: [build/zwift-ridesim-v032]
   workflow_dispatch:
 jobs:
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore working v0.2.1 base and apply v0.3.1 updates
+      - name: Restore working v0.2.1 base and apply v0.3.2 updates
         shell: bash
         run: |
           set -euo pipefail
@@ -24,6 +24,12 @@ jobs:
           git apply --verbose --directory=ridesim ride-v031.patch
           test -f ridesim/app/src/main/java/com/ridesim/zwift/FtmsPackets.java
           grep -q cadencePowerGain ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
+          echo "dae5d39f6e4535d7b2174008d3269b573cf6fb936cdfaa46a4abf8f3a861625e  ride-v032-patch.b64" | sha256sum -c -
+          base64 -d ride-v032-patch.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" > ride-v032.patch
+          git apply --check --directory=ridesim ride-v032.patch
+          git apply --verbose --directory=ridesim ride-v032.patch
+          grep -q "powerControl.addView" ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          grep -q "versionName '0.3.2'" ridesim/app/build.gradle
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -48,6 +54,6 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.3.1-debug-APK
+          name: KICKR-SIM-v0.3.2-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
