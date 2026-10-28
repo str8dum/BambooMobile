@@ -15,7 +15,6 @@ jobs:
           echo "75be623807a7789781627f4e79ab3fc514002d0db9f698b2b8136c262939b07a  ridesim-source.b64" | sha256sum -c -
           mkdir ridesim
           base64 -d ridesim-source.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" | tar -xf - -C ridesim
-          test -f ridesim/app/build.gradle
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,8 +24,10 @@ jobs:
           gradle-version: '8.10.2'
       - name: Install Android SDK platform
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          set -euo pipefail
+          TOOL="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          echo "Using $TOOL"
+          "$TOOL" 'platforms;android-35' 'build-tools;35.0.0'
       - name: Compile APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
