@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.4.0 Bridge APK
+name: KICKR-SIM v0.5.0 WiFi Grade APK
 on:
   push:
-    branches: [build/zwift-ridesim-v040]
+    branches: [build/zwift-ridesim-v050]
   workflow_dispatch:
 jobs:
   android:
@@ -42,6 +42,12 @@ jobs:
           grep -q "versionName '0.4.0'" ridesim/app/build.gradle
           grep -q "bridgeMultiplierPercent" ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
           test -f ridesim/app/src/main/java/com/ridesim/zwift/KickrClient.java
+          echo "92ec702c12d41a18c4b0917d4852153192d0e1c96e4b6d2e16079156dab9d010  ride-v050-patch.b64" | sha256sum -c -
+          base64 -d ride-v050-patch.b64 | gzip -dc > ride-v050.patch
+          git apply --check --directory=ridesim ride-v050.patch
+          git apply --verbose --directory=ridesim ride-v050.patch
+          test -f ridesim/app/src/main/java/com/ridesim/zwift/ZwiftGradeClient.java
+          grep -q "versionName '0.5.0'" ridesim/app/build.gradle
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -66,6 +72,6 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.4.0-Bridge-debug-APK
+          name: KICKR-SIM-v0.5.0-WiFiGrade-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
