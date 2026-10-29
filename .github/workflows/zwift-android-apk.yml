@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.6.0 Mode Selector APK
+name: KICKR-SIM v0.6.1 Layout and Icon APK
 on:
   push:
-    branches: [build/zwift-ridesim-v060]
+    branches: [build/zwift-ridesim-v061]
   workflow_dispatch:
 jobs:
   android:
@@ -54,6 +54,11 @@ jobs:
           grep -q "versionName '0.6.0'" ridesim/app/build.gradle
           grep -q 'private void showHome()' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
           grep -q 'private void showRidePage(boolean bridgeMode)' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          echo "c7064a09e9703eb2534c817cf64c28b0f34bf6ca6a3082bada84a5e19311f0ff  ride-v061-ui.patch.b64" | sha256sum -c -
+          base64 -d ride-v061-ui.patch.b64 | gzip -dc > ride-v061.patch
+          patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v061.patch
+          grep -q "versionName '0.6.1'" ridesim/app/build.gradle
+          test -s ridesim/tools/GenerateLauncherIcons.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -61,6 +66,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Generate full-size adaptive and legacy launcher icons
+        working-directory: ridesim
+        run: |
+          javac tools/GenerateLauncherIcons.java
+          java -cp tools GenerateLauncherIcons app/src/main/res
+          test -s app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          test -s app/src/main/res/drawable-nodpi/ic_launcher_art.png
       - name: Install Android SDK platform
         shell: bash
         run: |
@@ -78,6 +90,6 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.6.0-ModeSelector-debug-APK
+          name: KICKR-SIM-v0.6.1-Layout-Icon-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
