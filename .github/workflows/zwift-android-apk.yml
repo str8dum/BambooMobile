@@ -88,6 +88,15 @@ jobs:
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
+      - name: Package Android APK signing utility for private offline release signing
+        run: |
+          test -s "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar"
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KICKR-SIM-v0.6.1-apksigner-tool
+          path: apksigner.jar
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: KICKR-SIM-v0.6.1-Layout-Icon-debug-APK
