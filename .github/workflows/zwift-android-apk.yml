@@ -1,7 +1,7 @@
-name: Rich Kickr v0.6.7 FTMS Range Fix APK
+name: Rich Kickr v0.6.8 Single BLE Trainer Identity
 on:
   push:
-    branches: [build/zwift-ridesim-v067]
+    branches: [build/zwift-ridesim-v068]
   workflow_dispatch:
 jobs:
   android:
@@ -89,6 +89,20 @@ jobs:
           sed -i "s/versionCode 16/versionCode 17/; s/versionName '0.6.6'/versionName '0.6.7'/" ridesim/app/build.gradle
           grep -q "versionCode 17" ridesim/app/build.gradle
           grep -q 'FTMS_INCLINATION_RANGE' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
+          python3 tools/ride-v068-ble-advertise.py
+          grep -q 'versionCode 18' ridesim/app/build.gradle
+          grep -q "versionName '0.6.8'" ridesim/app/build.gradle
+          grep -q 'enableTrainerControl ? FTMS : CPS' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java").read_text()
+          f=s[s.index("private void startAdvertisingNow()"):s.index("private final AdvertiseCallback")]
+          assert f.count(".addServiceUuid(")==2
+          assert "new ParcelUuid(enableTrainerControl ? FTMS : CPS)" in f
+          assert ".addServiceUuid(new ParcelUuid(HR))" in f
+          assert "register(fm, notifyCh(INDOOR_BIKE))" in s
+          print("Single trainer advertisement structure verified")
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -127,11 +141,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.7-apksigner-tool
+          name: Rich-Kickr-v0.6.8-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.7-Debug-APK
+          name: Rich-Kickr-v0.6.8-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
