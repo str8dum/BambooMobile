@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.6.1 Layout and Icon APK
+name: KICKR-SIM v0.6.2 Gentler Hill Gain APK
 on:
   push:
-    branches: [build/zwift-ridesim-v061]
+    branches: [build/zwift-ridesim-v062]
   workflow_dispatch:
 jobs:
   android:
@@ -59,6 +59,11 @@ jobs:
           patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v061.patch
           grep -q "versionName '0.6.1'" ridesim/app/build.gradle
           test -s ridesim/tools/GenerateLauncherIcons.java
+          echo "530760defd4beb6883867006e24e9ebc6c64aba4be826ed06feda53a2f51f97e  ride-v062-patch.b64" | sha256sum -c -
+          base64 -d ride-v062-patch.b64 | gzip -dc > ride-v062.patch
+          patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v062.patch
+          grep -q "versionName '0.6.2'" ridesim/app/build.gradle
+          grep -q 'hillBoostFraction' ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -84,7 +89,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/selftest
-          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/GradeBridgeTest.java tools/BridgeSelfTest.java tools/SimulationSelfTest.java tools/HrSlopeTest.java
+          java -cp build/selftest com.ridesim.zwift.HillCurveTest
+          java -cp build/selftest GradeBridgeTest
+          java -cp build/selftest BridgeSelfTest
+          java -cp build/selftest SimulationSelfTest
+          java -cp build/selftest HrSlopeTest
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
@@ -94,11 +104,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.6.1-apksigner-tool
+          name: KICKR-SIM-v0.6.2-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.6.1-Layout-Icon-debug-APK
+          name: KICKR-SIM-v0.6.2-HillCurve-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
