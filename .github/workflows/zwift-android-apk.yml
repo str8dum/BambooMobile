@@ -1,7 +1,7 @@
 name: Rich Kickr v0.6.5 Progressive Hill and Randomized Power APK
 on:
   push:
-    branches: [build/zwift-ridesim-v065]
+    branches: [build/zwift-ridesim-v066]
   workflow_dispatch:
 jobs:
   android:
@@ -77,6 +77,12 @@ jobs:
           grep -q "versionName '0.6.5'" ridesim/app/build.gradle
           grep -q 'Rich Kickr' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
           grep -q 'HILL BOOST' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          echo "0b46ff96a505529c3dd1faa07a2548f9742e35ac50e7ab4a8b4c9dca320009ef  ride-v066-ftms-diagnostic-patch.b64" | sha256sum -c -
+          base64 -d ride-v066-ftms-diagnostic-patch.b64 | gzip -dc > ride-v066.patch
+          patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v066.patch
+          sed -i "s/versionCode 15/versionCode 16/; s/versionName '0.6.5'/versionName '0.6.6'/" ridesim/app/build.gradle
+          grep -q "versionCode 16" ridesim/app/build.gradle
+          grep -q 'ftmsDiagnostics' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -102,9 +108,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/selftest
-          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java tools/FtmsControlTest.java
           java -cp build/selftest com.ridesim.zwift.HillCurveTest
           java -cp build/selftest com.ridesim.zwift.HillFloorTest
+          java -cp build/selftest com.ridesim.zwift.FtmsControlTest
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
@@ -114,11 +121,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.5-apksigner-tool
+          name: Rich-Kickr-v0.6.6-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.5-Debug-APK
+          name: Rich-Kickr-v0.6.6-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
