@@ -1,7 +1,7 @@
-name: KICKR-SIM v0.5.0 WiFi Grade APK
+name: KICKR-SIM v0.6.0 Mode Selector APK
 on:
   push:
-    branches: [build/zwift-ridesim-v050]
+    branches: [build/zwift-ridesim-v060]
   workflow_dispatch:
 jobs:
   android:
@@ -48,6 +48,12 @@ jobs:
           git apply --verbose --directory=ridesim ride-v050.patch
           test -f ridesim/app/src/main/java/com/ridesim/zwift/ZwiftGradeClient.java
           grep -q "versionName '0.5.0'" ridesim/app/build.gradle
+          echo "af8768afdbc368b7c7cc14bcee1a1ec3b88ab78f0fbc6be149aa1e07c01bca28  ride-v060-ui-patch.b64" | sha256sum -c -
+          base64 -d ride-v060-ui-patch.b64 | node -e "const fs=require('fs'),z=require('zlib');process.stdout.write(z.brotliDecompressSync(fs.readFileSync(0)))" > ride-v060.patch
+          patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v060.patch
+          grep -q "versionName '0.6.0'" ridesim/app/build.gradle
+          grep -q 'private void showHome()' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          grep -q 'private void showRidePage(boolean bridgeMode)' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -72,6 +78,6 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: KICKR-SIM-v0.5.0-WiFiGrade-debug-APK
+          name: KICKR-SIM-v0.6.0-ModeSelector-debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
