@@ -1,7 +1,7 @@
-name: Rich Kickr v0.6.5 Progressive Hill and Randomized Power APK
+name: Rich Kickr v0.6.7 FTMS Range Fix APK
 on:
   push:
-    branches: [build/zwift-ridesim-v066]
+    branches: [build/zwift-ridesim-v067]
   workflow_dispatch:
 jobs:
   android:
@@ -83,6 +83,12 @@ jobs:
           sed -i "s/versionCode 15/versionCode 16/; s/versionName '0.6.5'/versionName '0.6.6'/" ridesim/app/build.gradle
           grep -q "versionCode 16" ridesim/app/build.gradle
           grep -q 'ftmsDiagnostics' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
+          echo "d29d7ca8557a7f1f37e963cd6b89a84f6a69e261761be55fdb6c7a9ec2b6ee71  ride-v067-ftms-inclination-patch.b64" | sha256sum -c -
+          base64 -d ride-v067-ftms-inclination-patch.b64 | gzip -dc > ride-v067.patch
+          patch --batch --forward --fuzz=0 -p1 -d ridesim < ride-v067.patch
+          sed -i "s/versionCode 16/versionCode 17/; s/versionName '0.6.6'/versionName '0.6.7'/" ridesim/app/build.gradle
+          grep -q "versionCode 17" ridesim/app/build.gradle
+          grep -q 'FTMS_INCLINATION_RANGE' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -121,11 +127,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.6-apksigner-tool
+          name: Rich-Kickr-v0.6.7-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.6-Debug-APK
+          name: Rich-Kickr-v0.6.7-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
