@@ -1,7 +1,7 @@
-name: Rich Kickr v0.6.9 True Zwift Road Grade
+name: Rich Kickr v0.7.0 Up To 2000 Watts
 on:
   push:
-    branches: [build/zwift-ridesim-v069]
+    branches: [build/zwift-ridesim-v070]
   workflow_dispatch:
 jobs:
   android:
@@ -107,6 +107,10 @@ jobs:
           assert "register(fm, notifyCh(INDOOR_BIKE))" in s
           print("Single trainer advertisement structure verified")
           PY
+          python3 tools/ride-v070-power2000.py
+          grep -q "versionCode 20" ridesim/app/build.gradle
+          grep -q "versionName '0.7.0'" ridesim/app/build.gradle
+          grep -q 'MAX_POWER_WATTS = 2000' ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -132,11 +136,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/selftest
-          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java tools/FtmsControlTest.java ../tools/ZwiftGradeScalingTest.java
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java tools/FtmsControlTest.java ../tools/ZwiftGradeScalingTest.java ../tools/Power2000Test.java
           java -cp build/selftest com.ridesim.zwift.HillCurveTest
           java -cp build/selftest com.ridesim.zwift.HillFloorTest
           java -cp build/selftest com.ridesim.zwift.FtmsControlTest
           java -cp build/selftest com.ridesim.zwift.ZwiftGradeScalingTest
+          java -cp build/selftest com.ridesim.zwift.Power2000Test
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
@@ -146,11 +151,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.9-apksigner-tool
+          name: Rich-Kickr-v0.7.0-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.9-Debug-APK
+          name: Rich-Kickr-v0.7.0-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
