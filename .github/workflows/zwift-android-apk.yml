@@ -1,7 +1,7 @@
-name: Rich Kickr v0.7.1 Numeric Exact Watt Keypad
+name: Rich Kickr v0.7.2 Clean Riding Screen
 on:
   push:
-    branches: [build/zwift-ridesim-v071]
+    branches: [build/zwift-ridesim-v072]
   workflow_dispatch:
 jobs:
   android:
@@ -116,6 +116,12 @@ jobs:
           grep -q "versionName '0.7.1'" ridesim/app/build.gradle
           grep -q 'DigitsKeyListener.getInstance("0123456789")' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
           grep -q 'powerSlider.setProgress(newWatts)' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          python3 tools/ride-v072-hide-ftms-ui.py
+          grep -q "versionCode 22" ridesim/app/build.gradle
+          grep -q "versionName '0.7.2'" ridesim/app/build.gradle
+          if grep -q 'FTMS CTRL' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java; then
+            echo 'Diagnostics still visible in rider UI'; exit 1
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -156,11 +162,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.7.1-apksigner-tool
+          name: Rich-Kickr-v0.7.2-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.7.1-Debug-APK
+          name: Rich-Kickr-v0.7.2-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
