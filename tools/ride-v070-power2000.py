@@ -13,8 +13,8 @@ src=sim.read_text()
 assert src.count("public final class SimEngine {")==1
 src=src.replace("public final class SimEngine {",
     "public final class SimEngine {\n    /** Maximum user target AND transmitted power, in watts. */\n    public static final int MAX_POWER_WATTS = 2000;",1)
-# There were five hardcoded simulation cap occurrences in the 0.6.x engine.
-assert src.count("1200")==5, ("power cap occurrences",src.count("1200"))
+# There were six hardcoded simulation cap occurrences in the 0.6.x engine.
+assert src.count("1200")==6, ("power cap occurrences",src.count("1200"))
 src=src.replace("1200","MAX_POWER_WATTS")
 sim.write_text(src)
 
