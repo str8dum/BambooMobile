@@ -1,7 +1,7 @@
-name: Rich Kickr v0.7.0 Up To 2000 Watts
+name: Rich Kickr v0.7.1 Numeric Exact Watt Keypad
 on:
   push:
-    branches: [build/zwift-ridesim-v070]
+    branches: [build/zwift-ridesim-v071]
   workflow_dispatch:
 jobs:
   android:
@@ -111,6 +111,11 @@ jobs:
           grep -q "versionCode 20" ridesim/app/build.gradle
           grep -q "versionName '0.7.0'" ridesim/app/build.gradle
           grep -q 'MAX_POWER_WATTS = 2000' ridesim/app/src/main/java/com/ridesim/zwift/SimEngine.java
+          python3 tools/ride-v071-exact-watts.py
+          grep -q "versionCode 21" ridesim/app/build.gradle
+          grep -q "versionName '0.7.1'" ridesim/app/build.gradle
+          grep -q 'DigitsKeyListener.getInstance("0123456789")' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
+          grep -q 'powerSlider.setProgress(newWatts)' ridesim/app/src/main/java/com/ridesim/zwift/MainActivity.java
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -151,11 +156,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.7.0-apksigner-tool
+          name: Rich-Kickr-v0.7.1-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.7.0-Debug-APK
+          name: Rich-Kickr-v0.7.1-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
