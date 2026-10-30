@@ -1,7 +1,7 @@
-name: Rich Kickr v0.6.8 Single BLE Trainer Identity
+name: Rich Kickr v0.6.9 True Zwift Road Grade
 on:
   push:
-    branches: [build/zwift-ridesim-v068]
+    branches: [build/zwift-ridesim-v069]
   workflow_dispatch:
 jobs:
   android:
@@ -93,6 +93,10 @@ jobs:
           grep -q 'versionCode 18' ridesim/app/build.gradle
           grep -q "versionName '0.6.8'" ridesim/app/build.gradle
           grep -q 'enableTrainerControl ? FTMS : CPS' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
+          python3 tools/ride-v069-grade-restore.py
+          grep -q 'versionCode 19' ridesim/app/build.gradle
+          grep -q "versionName '0.6.9'" ridesim/app/build.gradle
+          grep -q 'setFtmsTrainerGrade' ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java
           python3 - <<'PY'
           from pathlib import Path
           s=Path("ridesim/app/src/main/java/com/ridesim/zwift/BlePeripheral.java").read_text()
@@ -128,10 +132,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/selftest
-          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java tools/FtmsControlTest.java
+          javac -d build/selftest app/src/main/java/com/ridesim/zwift/SimEngine.java app/src/main/java/com/ridesim/zwift/BlePackets.java app/src/main/java/com/ridesim/zwift/FtmsPackets.java app/src/main/java/com/ridesim/zwift/KickrPackets.java tools/HillCurveTest.java tools/HillFloorTest.java tools/FtmsControlTest.java ../tools/ZwiftGradeScalingTest.java
           java -cp build/selftest com.ridesim.zwift.HillCurveTest
           java -cp build/selftest com.ridesim.zwift.HillFloorTest
           java -cp build/selftest com.ridesim.zwift.FtmsControlTest
+          java -cp build/selftest com.ridesim.zwift.ZwiftGradeScalingTest
       - name: Build installable Android APK
         working-directory: ridesim
         run: gradle --no-daemon --stacktrace :app:assembleDebug
@@ -141,11 +146,11 @@ jobs:
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.8-apksigner-tool
+          name: Rich-Kickr-v0.6.9-apksigner-tool
           path: apksigner.jar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Rich-Kickr-v0.6.8-Debug-APK
+          name: Rich-Kickr-v0.6.9-Debug-APK
           path: ridesim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
